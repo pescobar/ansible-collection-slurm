@@ -35,11 +35,17 @@ record new findings in `docs/design.md`.
 - Cluster name: `linux`. Supported/CI-tested Slurm versions: 25.05.4,
   25.11.5, 26.05.1.
 
+Dev deps live in a project venv (`.venv/`, gitignored) —
+`python3 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt`
+(ansible-core, pytest, ansible-lint). `python` is not on PATH here; use
+`python3` / `.venv/bin/python`.
+
 ```sh
 ./tests/docker/generate-ssh-key.sh
 SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --wait --build
-./tests/acceptance/run-tests.sh          # needs ansible-core on PATH
-python -m pytest tests/unit/             # pure logic, no cluster
+./tests/acceptance/run-tests.sh          # 7-scenario converge/purge suite
+./tests/acceptance/import-roundtrip.sh   # importer round-trip (converge → import → --check no-op)
+.venv/bin/python -m pytest tests/unit/   # pure logic, no cluster
 ```
 
 ## Architecture
@@ -51,9 +57,30 @@ python -m pytest tests/unit/             # pure logic, no cluster
   normalized), `compute_plan()` (desired vs live → categorized plan),
   `canonical_text()`/`projected_state()` (--diff plumbing).
 - `plugins/modules/slurm_acct.py` — the module, runs on the slurmctld host.
+- `plugins/filter/slurm_acct.py` — `merge_account_fragments` filter (thin
+  wrapper over the module_utils function of the same name; used by the role
+  to merge sharded per-account files).
 - `roles/slurm_acct/` — thin wrapper: `slurm_acct_*` vars → module call +
-  unmanaged-entities report.
-- `playbooks/` — `site.yml` + sample inventory (fully worked example data).
+  unmanaged-entities report. Also assembles sharded accounts (see below).
+- `playbooks/` — `site.yml` (converge) + `import.yml` (aux: generate
+  inventory from a running cluster) + sample inventory (fully worked data).
+- `tools/generate_inventory.py` — the importer: `sacctmgr dump` → inventory,
+  reusing `parse_flat()`. Reverses the field-name maps; round-trip-tested.
+
+### Inventory layout (sample, and what the importer emits)
+
+- `group_vars/slurm_controller/` holds `slurm_cluster.yml`, `slurm_qos.yml`,
+  `slurm_users.yml` (renamed with a `slurm_` prefix — the filename doesn't
+  affect the var names inside).
+- **Accounts are sharded one-file-per-account** under
+  `host_vars/<host>/slurm_accounts.d/*.yml` (each file `account_name: {…}`).
+  `slurm_acct_accounts_dir` (role default
+  `{{ inventory_dir }}/host_vars/{{ inventory_hostname }}/slurm_accounts.d`)
+  globs and merges them into `slurm_acct_accounts`, failing on a duplicate
+  account name. The `.d` suffix is load-bearing: Ansible's DataLoader skips
+  extensioned subdirs of `host_vars/<host>/`, so the fragments are NOT
+  auto-loaded as stray host vars (a plain `slurm_accounts` dir would leak).
+  Inline `slurm_acct_accounts` still works and merges under the fragments.
 
 ### The apply order is load-bearing (all steps verified empirically)
 
@@ -133,16 +160,22 @@ python -m pytest tests/unit/             # pure logic, no cluster
   The module's own deletion order does not produce this.
 - The acceptance suite (`tests/acceptance/run-tests.sh`) copies the sample
   inventory to a scratch dir and edits the copy between phases — the
-  committed sample is never modified. It asserts 7 scenarios; keep them in
-  sync with the README's CI description when adding phases.
+  committed sample is never modified. Account edits now add/remove/patch
+  per-account files under `host_vars/slurmctld/slurm_accounts.d/` (not one
+  dict). It asserts 7 scenarios; keep them in sync with the README's CI
+  description when adding phases. The importer round-trip is a separate
+  script (`tests/acceptance/import-roundtrip.sh`), deliberately NOT an 8th
+  scenario, so the count stays 7.
 - `sacctmgr dump` emits only explicitly-stored values (inherited values do
   not appear on member lines), and emits user-global fields (DefaultAccount,
   AdminLevel, WCKeys, Coordinator) repeated on every line of the same user.
 - The flat file cannot represent `'` or `:` inside values (the `:` field
   separator has no escaping); validation refuses them.
 
-## What's left / roadmap
+## Status / roadmap
 
+- **One-file-per-account sharding** (DONE): filter + role assembly + sample
+  migrated to `slurm_accounts.d/` + `slurm_`-prefixed group_vars. Live-verified.
 - **Inventory importer** (DONE): `tools/generate_inventory.py` +
   `playbooks/import.yml`. Driven by `sacctmgr dump` (parsed with the shared
   `parse_flat()`) and `sacctmgr -nP show user/account` for zero-association
