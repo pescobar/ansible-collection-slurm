@@ -143,20 +143,28 @@ python -m pytest tests/unit/             # pure logic, no cluster
 
 ## What's left / roadmap
 
-- **Inventory importer** (explicitly deferred, do not start without being
-  asked): a `tools/` script based on the provider repo's
-  `tools/generate_import/generate_import.py`, but driven by **native Slurm
-  commands** (`scontrol show config` for the cluster name, `sacctmgr dump` +
-  `sacctmgr -nP show` for state) instead of slurmrestd, emitting this
-  collection's group_vars files. Design notes for when it happens: reuse
-  `parse_flat()` from module_utils (records are already normalized); split
-  fields via the reverse of `ACCOUNT_OVERRIDE_FIELDS`/`ASSOCIATION_ONLY_FIELDS`;
-  hoist unanimous member fields into `association_defaults` (mirroring the
-  provider importer); emit bare-string members when no overrides remain;
-  only emit `default_accounts` entries for multi-account users; warn about
-  zero-association entities (unrepresentable) and unsupported fields; the
-  acceptance test is a round-trip — import a converged cluster, then
-  `--check` against the generated inventory must report zero changes.
+- **Inventory importer** (DONE): `tools/generate_inventory.py` +
+  `playbooks/import.yml`. Driven by `sacctmgr dump` (parsed with the shared
+  `parse_flat()`) and `sacctmgr -nP show user/account` for zero-association
+  detection — no slurmrestd. Reverses the field-name maps to emit the
+  one-file-per-account layout + `slurm_{cluster,qos,users}` group_vars:
+  bare-string members when an assoc has no overrides, `default_accounts`
+  only for multi-account users, skips/ warns on `normal` and zero-assoc
+  entities. Verified by a pure round-trip unit test
+  (`tests/unit/test_generate_inventory.py`: import → `resolve()` →
+  `compute_plan` vs `parse_flat(dump)` = no changes) and a live round-trip
+  acceptance test (`tests/acceptance/import-roundtrip.sh`).
+  Not yet done: hoisting unanimous member fields into `association_defaults`
+  (currently emits explicit per-member overrides — round-trips, just more
+  verbose) and per-account `coordinators` (warns; `Coordinator` is
+  user-global in the dump).
+- **Configure `root`/`normal` in place** (requested, not yet built): lift the
+  declaration refusals in `resolve()` for the `root` account and `normal`
+  QOS while keeping the deletion guard, converging their declared fields via
+  targeted `sacctmgr modify` (not the load file — avoids finding 7 and root's
+  special-casing). Scope agreed: root fairshare + account limits + cluster
+  default/allowed QOS (NOT root-user AdminLevel); all QOS fields for `normal`.
+  Verify `modify` persistence live on 25.05 + 25.11 first.
 - WCKey removal (currently stop-managing only).
 - Non-accounting Slurm functionality (the reason the collection is named
   `pescobar.slurm`).

@@ -20,6 +20,12 @@ non-accounting Slurm functionality can live in the same collection.
   ``slurm_acct_accounts_dir``) instead of one large ``slurm_acct_accounts``
   dict; the role merges them and fails on a duplicate account name. The
   ``.d`` suffix keeps Ansible from auto-loading the fragments as host vars.
+- Inventory importer: ``tools/generate_inventory.py`` plus the aux playbook
+  ``playbooks/import.yml`` reverse a running cluster's ``sacctmgr dump`` into
+  this collection's inventory layout (per-account fragments +
+  ``slurm_{cluster,qos,users}`` group_vars). Round-trip verified — a
+  ``site.yml --check`` against the generated inventory is a no-op — by both a
+  pure unit test and a live acceptance test.
 - Sample playbook + fully worked sample inventory under ``playbooks/``.
 - Self-contained docker test stack (``tests/docker/``), 7-scenario live
   acceptance suite (``tests/acceptance/``), pytest unit suite for the pure

@@ -206,9 +206,42 @@ positives + a correct pending-change diff), value modification, purge with
 `normal`/`root` protection, the malformed-file guard, and the
 `fairshare=parent` round-trip.
 
+## Importing from an existing cluster
+
+To adopt this collection on a cluster that already has accounting state, the
+importer reverses the data model: it reads `sacctmgr dump` and writes the
+inventory this collection consumes — no hand-transcription.
+
+```bash
+ansible-playbook -i inventory/hosts.yml import.yml \
+    -e import_output_dir=./imported_inventory
+```
+
+The aux playbook (`playbooks/import.yml`) gathers the dump over the same SSH
+transport the collection uses and runs `tools/generate_inventory.py` on the
+controller, producing a fresh, non-destructive tree:
+
+```
+imported_inventory/
+  group_vars/slurm_controller/{slurm_cluster,slurm_qos,slurm_users}.yml
+  host_vars/<host>/slurm_accounts.d/<account>.yml   # one per account
+```
+
+It emits bare-string members where an association has no overrides, splits
+member fields into `account_overrides` / `association`, pins `default_account`
+only for multi-account users, and warns about anything it cannot represent
+(zero-association entities, the built-in `normal` QOS, unknown fields). Add
+your `hosts.yml`, then verify the round-trip — it is designed to be a no-op:
+
+```bash
+ansible-playbook -i imported_inventory/hosts.yml site.yml --check --diff
+```
+
+`tools/generate_inventory.py` also runs standalone on any dump file
+(`generate_inventory.py dump.cfg -o out/ --host <name>`).
+
 ## Roadmap
 
-- An inventory **importer** driven by native Slurm commands (`scontrol`,
-  `sacctmgr`) to bootstrap the group_vars from an existing cluster —
-  planned, not yet implemented.
+- Managing the built-in `root` account and `normal` QOS in place (configure,
+  never delete) — planned.
 - Non-accounting Slurm functionality (hence the collection name).
