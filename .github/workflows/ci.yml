@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install test requirements
+        run: pip install pytest
+
+      - name: Run renderer/parser/planner unit tests
+        run: python -m pytest tests/unit/ -v
+
+  lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-core + ansible-lint
+        run: pip install -r tests/requirements.txt
+
+      # ansible-lint needs the collection installed so the FQCN role/module
+      # references in the playbooks resolve.
+      - name: Install the collection
+        run: ansible-galaxy collection install --force . -p /tmp/collections
+
+      - name: Run ansible-lint
+        env:
+          ANSIBLE_COLLECTIONS_PATH: /tmp/collections
+        run: ansible-lint
+
+  acceptance:
+    name: Acceptance (Slurm ${{ matrix.slurm_version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        slurm_version: ["25.05.4", "25.11.5", "26.05.1"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-core
+        run: pip install ansible-core
+
+      # -----------------------------------------------------------------------
+      # Start the Slurm test cluster (mysql + slurmdbd + slurmctld with the
+      # sshd overlay — base images are pre-built on GHCR by the
+      # terraform-provider-slurm sibling project)
+      # -----------------------------------------------------------------------
+      - name: Generate SSH test keypair
+        run: ./tests/docker/generate-ssh-key.sh
+
+      - name: Start Slurm cluster
+        env:
+          SLURM_VERSION: ${{ matrix.slurm_version }}
+        run: docker compose -f tests/docker/docker-compose.yml up -d --wait --build
+
+      - name: Wait for slurmctld to be ready
+        run: |
+          echo "Waiting for slurmctld..."
+          for i in $(seq 1 36); do
+            if docker exec slurm-ansible-slurmctld scontrol ping &>/dev/null 2>&1; then
+              echo "slurmctld ready."
+              break
+            fi
+            echo "  attempt $i/36 — sleeping 5s"
+            sleep 5
+          done
+          docker exec slurm-ansible-slurmctld scontrol ping
+
+      - name: Print Slurm version
+        run: docker exec slurm-ansible-slurmctld sacctmgr -V
+
+      # -----------------------------------------------------------------------
+      # Run the acceptance suite over SSH (production-like: no docker
+      # connection plugin, no local execution — see the script for the
+      # 7 asserted scenarios)
+      # -----------------------------------------------------------------------
+      - name: Run acceptance tests over SSH
+        run: ./tests/acceptance/run-tests.sh
+
+      - name: Collect Docker logs on failure
+        if: failure()
+        run: |
+          for svc in slurm-ansible-mysql slurm-ansible-slurmdbd slurm-ansible-slurmctld; do
+            echo "=== $svc ==="
+            docker logs "$svc" 2>&1 | tail -50 || true
+          done
