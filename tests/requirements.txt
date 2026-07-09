@@ -1,0 +1,4 @@
+# Controller-side requirements for developing/testing the collection.
+ansible-core>=2.15
+pytest
+ansible-lint
