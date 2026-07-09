@@ -1,0 +1,31 @@
+---
+# Enable deletions (load ... clean + QOS/orphan purge). Without it the run is
+# additive-only: entities missing from inventory are reported as unmanaged
+# but never removed. Opt in deliberately — with purge enabled, everything not
+# in inventory (except the built-in `normal` QOS and `root` account/user) is
+# removed from the cluster.
+slurm_acct_purge: false
+
+# Data model — mirrors examples/big-cluster/data/ of terraform-provider-slurm.
+slurm_acct_qos: {}
+slurm_acct_accounts: {}
+
+# Shard accounts one-file-per-account instead of one big slurm_acct_accounts
+# dict. The role globs this directory's *.yml files (each a mapping of
+# account-name -> attributes) and merges them into slurm_acct_accounts,
+# failing if an account name appears in two files. Fragments merge on top of
+# any inline slurm_acct_accounts.
+#
+# Defaults to a per-host directory under host_vars/, so each managed
+# controller keeps its own accounts alongside its other host vars — just drop
+# files in host_vars/<host>/slurm_accounts.d/. The `.d` suffix is required:
+# Ansible skips extensioned subdirectories of host_vars/<host>/ (see
+# DataLoader._get_dir_vars_files), so the fragments are read only by this
+# role's merge and are NOT auto-loaded as stray host vars named per account.
+# Set to "" to disable sharding and use only an inline slurm_acct_accounts.
+slurm_acct_accounts_dir: "{{ inventory_dir }}/host_vars/{{ inventory_hostname }}/slurm_accounts.d"
+slurm_acct_admin_levels: {}
+slurm_acct_default_accounts: {}
+slurm_acct_wckeys: {}
+
+slurm_acct_sacctmgr_path: sacctmgr

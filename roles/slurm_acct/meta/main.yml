@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  author: Pablo Escobar Lopez
+  description: Declarative Slurm accounting via sacctmgr flat-file load
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - slurm
+    - hpc
+dependencies: []

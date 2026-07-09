@@ -1,0 +1,54 @@
+---
+- name: Check required variables
+  ansible.builtin.assert:
+    that:
+      - slurm_acct_cluster is defined
+      - slurm_acct_cluster | length > 0
+    fail_msg: >-
+      slurm_acct_cluster must be set to the Slurm cluster name (as reported
+      by `sacctmgr show cluster`).
+
+- name: Assemble sharded account fragments
+  when: slurm_acct_accounts_dir | length > 0
+  block:
+    - name: Load account fragments from slurm_acct_accounts_dir
+      ansible.builtin.set_fact:
+        _slurm_acct_fragments: >-
+          {{ (_slurm_acct_fragments | default([]))
+             + [[item, lookup('ansible.builtin.file', item) | from_yaml]] }}
+      loop: "{{ query('ansible.builtin.fileglob', slurm_acct_accounts_dir ~ '/*.yml') | sort }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: Merge account fragments into slurm_acct_accounts (fails on duplicate account)
+      ansible.builtin.set_fact:
+        slurm_acct_accounts: >-
+          {{ slurm_acct_accounts
+             | pescobar.slurm.merge_account_fragments(_slurm_acct_fragments | default([])) }}
+
+- name: Converge Slurm accounting state
+  pescobar.slurm.slurm_acct:
+    cluster: "{{ slurm_acct_cluster }}"
+    qos: "{{ slurm_acct_qos }}"
+    accounts: "{{ slurm_acct_accounts }}"
+    admin_levels: "{{ slurm_acct_admin_levels }}"
+    default_accounts: "{{ slurm_acct_default_accounts }}"
+    wckeys: "{{ slurm_acct_wckeys }}"
+    purge: "{{ slurm_acct_purge | bool }}"
+    sacctmgr_path: "{{ slurm_acct_sacctmgr_path }}"
+  register: slurm_acct_result
+
+- name: Report unmanaged entities (present live, absent from inventory, purge disabled)
+  ansible.builtin.debug:
+    msg: >-
+      Unmanaged (would be deleted with slurm_acct_purge=true):
+      qos={{ slurm_acct_result.plan.qos.unmanaged }}
+      accounts={{ slurm_acct_result.plan.accounts.unmanaged }}
+      assocs={{ slurm_acct_result.plan.assocs.unmanaged }}
+      users={{ slurm_acct_result.plan.users.unmanaged }}
+  when:
+    - not (slurm_acct_purge | bool)
+    - (slurm_acct_result.plan.qos.unmanaged
+       + slurm_acct_result.plan.accounts.unmanaged
+       + slurm_acct_result.plan.assocs.unmanaged
+       + slurm_acct_result.plan.users.unmanaged) | length > 0
