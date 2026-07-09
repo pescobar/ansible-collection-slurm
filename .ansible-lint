@@ -1,0 +1,8 @@
+---
+profile: moderate
+
+exclude_paths:
+  # docker compose files (the `!reset` override tag is not Ansible YAML)
+  - tests/docker/
+  # pytest tree, not Ansible content
+  - tests/unit/

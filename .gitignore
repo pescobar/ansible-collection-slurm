@@ -1,0 +1,9 @@
+.ansible/
+.venv/
+venv/
+tests/docker/.ssh/
+tests/output/
+*.tar.gz
+__pycache__/
+*.pyc
+.pytest_cache/

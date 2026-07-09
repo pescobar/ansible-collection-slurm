@@ -1,0 +1,26 @@
+namespace: pescobar
+name: slurm
+version: 0.1.0
+readme: README.md
+authors:
+  - Pablo Escobar Lopez (@pescobar)
+description: >-
+  Slurm management for Ansible. Currently: declarative Slurm accounting
+  (accounts, users, associations, QOS) via sacctmgr's flat-file dump/load
+  mechanism, plus an inventory importer driven by native Slurm commands.
+  Scoped as a general Slurm collection so future non-accounting
+  functionality can live here too.
+license:
+  - MIT
+tags:
+  - slurm
+  - hpc
+  - infrastructure
+repository: https://github.com/pescobar/ansible-collection-slurm
+issues: https://github.com/pescobar/ansible-collection-slurm/issues
+build_ignore:
+  - tests/output
+  - tests/docker/.ssh
+  - docs
+  - "*.tar.gz"
+  - CLAUDE.md
