@@ -1,0 +1,107 @@
+---
+# Generate pescobar.slurm inventory variables from a running cluster.
+#
+# Reads live accounting state over the same SSH transport the collection
+# uses (sacctmgr dump on the slurmctld host), then reverses it into this
+# collection's inventory layout — group_vars/slurm_controller/{slurm_cluster,
+# slurm_qos,slurm_users}.yml plus one host_vars/<host>/slurm_accounts.d/ file
+# per account. Non-destructive: writes to a fresh directory you review before
+# using. Round-trip goal — `site.yml --check` against the output is a no-op.
+#
+#   ansible-playbook -i inventory/hosts.yml import.yml \
+#       -e import_output_dir=./imported_inventory
+#
+# Then review, add your hosts.yml (connection details), and dry-run:
+#   ansible-playbook -i imported_inventory/hosts.yml site.yml --check --diff
+
+- name: Import Slurm accounting state into inventory variables
+  hosts: slurm_controller
+  gather_facts: false
+  vars:
+    slurm_acct_sacctmgr_path: sacctmgr
+    import_output_dir: "{{ playbook_dir }}/imported_inventory"
+    _remote_dump: /tmp/slurm_acct_import_dump.cfg
+  tasks:
+    - name: Determine the cluster name
+      ansible.builtin.command: "{{ slurm_acct_sacctmgr_path }} -nP show cluster format=cluster"
+      register: _cluster
+      changed_when: false
+
+    - name: Refuse if no cluster is registered on this slurmdbd
+      ansible.builtin.assert:
+        that: _cluster.stdout_lines | length > 0
+        fail_msg: >-
+          sacctmgr reports no cluster — this host cannot reach slurmdbd, or
+          the cluster is not registered.
+
+    - name: Dump the accounting state on the controller host
+      ansible.builtin.command:
+        cmd: "{{ slurm_acct_sacctmgr_path }} dump {{ _cluster.stdout_lines | first }} file={{ _remote_dump }}"
+      changed_when: false
+
+    - name: Read the dump back to the Ansible controller
+      ansible.builtin.slurp:
+        src: "{{ _remote_dump }}"
+      register: _dump
+
+    - name: Remove the temporary dump from the host
+      ansible.builtin.file:
+        path: "{{ _remote_dump }}"
+        state: absent
+
+    - name: List live users and accounts (to flag zero-association entities)
+      ansible.builtin.command: "{{ slurm_acct_sacctmgr_path }} -nP show {{ item }} format={{ item }}"
+      register: _listings
+      changed_when: false
+      loop:
+        - user
+        - account
+
+    - name: Create the staging directory on the controller
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ import_output_dir }}/.import-staging"
+        state: directory
+        mode: "0755"
+
+    - name: Stage the dump and entity listings on the controller
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: "{{ item.content }}"
+        dest: "{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - {content: "{{ _dump.content | b64decode }}", dest: "{{ _stage }}/dump.cfg"}
+        - {content: "{{ _listings.results[0].stdout }}\n", dest: "{{ _stage }}/users.txt"}
+        - {content: "{{ _listings.results[1].stdout }}\n", dest: "{{ _stage }}/accounts.txt"}
+      vars:
+        _stage: "{{ import_output_dir }}/.import-staging"
+      loop_control:
+        label: "{{ item.dest | basename }}"
+
+    - name: Generate the inventory tree
+      delegate_to: localhost
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/../tools/generate_inventory.py"
+          - "{{ import_output_dir }}/.import-staging/dump.cfg"
+          - "--output={{ import_output_dir }}"
+          - "--host={{ inventory_hostname }}"
+          - "--users-list={{ import_output_dir }}/.import-staging/users.txt"
+          - "--accounts-list={{ import_output_dir }}/.import-staging/accounts.txt"
+      register: _gen
+      changed_when: true
+
+    - name: Drop the staging directory
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ import_output_dir }}/.import-staging"
+        state: absent
+
+    - name: Report result
+      ansible.builtin.debug:
+        msg: >-
+          {{ _gen.stderr }} — inventory written under {{ import_output_dir }}.
+          Add a hosts.yml (connection details), then dry-run:
+          ansible-playbook -i {{ import_output_dir }}/hosts.yml site.yml --check --diff
