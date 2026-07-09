@@ -1,0 +1,15 @@
+---
+# Converge Slurm accounting on the slurmctld host.
+#
+# Dry-run (the replacement for `tofu plan` — read-only, shows every pending
+# change including what a purge would delete):
+#   ansible-playbook -i inventory/hosts.yml site.yml --check --diff
+#
+# Apply (additive-only by default; deletions require slurm_acct_purge=true):
+#   ansible-playbook -i inventory/hosts.yml site.yml
+
+- name: Manage Slurm accounting
+  hosts: slurm_controller
+  gather_facts: false
+  roles:
+    - pescobar.slurm.slurm_acct

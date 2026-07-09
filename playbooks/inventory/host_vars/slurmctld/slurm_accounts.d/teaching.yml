@@ -1,0 +1,38 @@
+---
+teaching:
+  description: Teaching and courses
+  organization: education
+  fairshare: 50
+  default_qos: short
+  allowed_qos: [short, standard, interactive]
+  max_jobs: 100
+  max_tres_per_node:
+    - type: cpu
+      count: 8
+  grp_tres:
+    - type: cpu
+      count: 200
+  # Account-wide association defaults: every member inherits these unless
+  # its own entry overrides the field — here, every student draws on the
+  # account's own fairshare weight instead of carrying their own.
+  association_defaults:
+    account_overrides:
+      fairshare: parent
+  user_associations:
+    # TA slot: tighter, TA-appropriate limits.
+    - user: dave
+      account_overrides:
+        fairshare: 15   # overrides the account-wide `parent` default
+      association:
+        priority: 20
+        max_wall_pj: 240
+        grp_wall: 2000
+    # Students: bare names — each gets fairshare: parent from
+    # association_defaults above.
+    - carol
+    - john
+    - erin
+    - frank
+    - grace
+    - heidi
+    - ivan

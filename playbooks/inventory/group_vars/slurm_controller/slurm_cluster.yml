@@ -1,0 +1,3 @@
+---
+# The Slurm cluster name, as reported by `sacctmgr show cluster`.
+slurm_acct_cluster: linux

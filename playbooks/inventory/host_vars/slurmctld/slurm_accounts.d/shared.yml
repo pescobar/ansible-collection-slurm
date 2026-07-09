@@ -1,0 +1,13 @@
+---
+shared:
+  description: Shared cross-lab projects
+  organization: shared
+  fairshare: 40
+  default_qos: standard
+  allowed_qos: [standard]
+  user_associations:
+    # Partition-scoping demonstrated on a non-default account of a
+    # multi-account user (same example as examples/big-cluster).
+    - user: john
+      association:
+        partition: cpu

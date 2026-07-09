@@ -1,0 +1,9 @@
+---
+lab_chem:
+  description: Chemistry Lab
+  organization: chemistry
+  fairshare: 80
+  default_qos: standard
+  allowed_qos: [standard]
+  user_associations:
+    - john

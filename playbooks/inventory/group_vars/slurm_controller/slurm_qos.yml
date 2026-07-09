@@ -1,0 +1,37 @@
+---
+# Cluster-wide QOS definitions. Mirrors examples/big-cluster/qos.tf of
+# terraform-provider-slurm. Never declare Slurm's built-in `normal` QOS here
+# (the module refuses it).
+slurm_acct_qos:
+  short:
+    description: Short jobs, fast turnaround
+    priority: 150
+    max_wall_pj: 60
+  standard:
+    description: Default general-purpose QOS
+    priority: 100
+    max_wall_pj: 1440
+  long:
+    description: Long-running jobs
+    priority: 80
+    max_wall_pj: 10080
+  high:
+    description: High priority
+    priority: 300
+    max_wall_pj: 2880
+  low:
+    description: Low priority / backfill
+    priority: 10
+    max_wall_pj: 4320
+  gpu:
+    description: GPU partitions
+    priority: 200
+    max_wall_pj: 2880
+  interactive:
+    description: Interactive sessions
+    priority: 250
+    max_wall_pj: 480
+  debug:
+    description: Debugging, short limits
+    priority: 250
+    max_wall_pj: 30

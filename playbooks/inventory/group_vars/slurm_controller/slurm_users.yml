@@ -1,0 +1,22 @@
+---
+# Exception maps — same semantics as terraform-provider-slurm's
+# examples/big-cluster/data/users/*.yaml, one map per concern.
+
+# Users with a non-default admin_level (Operator or Administrator). Everyone
+# else is None and is NOT listed here.
+slurm_acct_admin_levels:
+  carol: Administrator
+
+# Users who belong to more than one account, pinning which one is their login
+# default_account. Single-account users are NOT listed here — their default
+# is derived from the one account that lists them.
+slurm_acct_default_accounts:
+  john: lab_physics
+  carol: admin
+
+# Users with a pinned default WCKey. Unlike the REST API (which cannot read
+# default_wc_key back), the sacctmgr dump/load engine round-trips WCKeys
+# fully — declared keys are registered and set as default, and drift is
+# visible in --check --diff.
+slurm_acct_wckeys:
+  dave: genomics

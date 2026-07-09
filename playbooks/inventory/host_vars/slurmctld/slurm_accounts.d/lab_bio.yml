@@ -1,0 +1,44 @@
+---
+lab_bio:
+  description: Biology Lab
+  organization: biology
+  fairshare: 100
+  default_qos: standard
+  allowed_qos: [standard, long, gpu]
+  max_tres_mins_per_job:
+    - type: cpu
+      count: 20000
+  grp_tres_mins:
+    - type: cpu
+      count: 400000
+  grp_tres_run_mins:
+    - type: cpu
+      count: 100000
+  user_associations:
+    # Postdoc: job-count throttled, tighter per-user TRES caps than the
+    # lab's own account-level limits above.
+    - user: bob
+      account_overrides:
+        max_jobs: 5
+        max_tres_per_node:
+          - type: cpu
+            count: 4
+        max_tres_mins_per_job:
+          - type: cpu
+            count: 500
+        grp_tres:
+          - type: cpu
+            count: 50
+        grp_tres_mins:
+          - type: cpu
+            count: 5000
+        grp_tres_run_mins:
+          - type: cpu
+            count: 2000
+      association:
+        max_jobs_accrue: 10
+        max_submit_jobs: 30
+        grp_jobs: 15
+        grp_jobs_accrue: 8
+        grp_submit_jobs: 25
+    - john

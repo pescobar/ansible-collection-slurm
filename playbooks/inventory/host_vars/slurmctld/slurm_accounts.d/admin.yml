@@ -1,0 +1,19 @@
+---
+# One account per file (the top-level key is the account name). The slurm_acct
+# role merges every slurm_accounts.d/*.yml under this host's host_vars into
+# slurm_acct_accounts (default slurm_acct_accounts_dir), failing if an account
+# name appears in two files. The `.d` suffix keeps Ansible from auto-loading
+# these as host vars — see the role's defaults/main.yml.
+admin:
+  description: Cluster administration
+  organization: it
+  fairshare: 200
+  default_qos: high
+  allowed_qos: [high, standard, debug]
+  user_associations:
+    - carol
+    # Object form: overrides john's QOS for this account only.
+    - user: john
+      account_overrides:
+        default_qos: debug
+        allowed_qos: [debug, standard]
