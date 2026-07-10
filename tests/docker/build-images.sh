@@ -16,8 +16,9 @@ cd "$(dirname "$0")"
 REGISTRY="ghcr.io/pescobar/ansible-collection-slurm/slurm-test"
 
 # Keep in sync with the CI matrix in
-# .github/workflows/acceptance-management.yml and the README table.
-DEFAULT_VERSIONS=(24.11.7 25.05.8 25.11.6 26.05.1)
+# .github/workflows/acceptance-management.yml and the README table. Slurm 25.05
+# is the supported floor (QOS entered the sacctmgr flat-file format then).
+DEFAULT_VERSIONS=(25.05.8 25.11.6 26.05.1)
 
 versions=("$@")
 if [ ${#versions[@]} -eq 0 ]; then

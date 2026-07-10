@@ -8,7 +8,7 @@ declarative mechanism: the desired state is rendered into `sacctmgr`'s
 flat-file format and converged with `sacctmgr -i load`, running **on the
 slurmctld host over SSH**. No slurmrestd, no JWT tokens.
 
-Verified end-to-end against Slurm **24.11.7, 25.05.8, 25.11.6, and 26.05.1**. Every
+Verified end-to-end against Slurm **25.05.8, 25.11.6, and 26.05.1**. Every
 behavioral claim in this README was confirmed against a live cluster —
 see [docs/design.md](docs/design.md) for the full list of verified sacctmgr
 semantics and the version differences found.
@@ -17,6 +17,17 @@ This project started as the Ansible alternative to
 [terraform-provider-slurm](https://github.com/pescobar/terraform-provider-slurm)
 and shares its account-centric data model, so a site can move between the
 two by copying YAML values.
+
+## Requirements
+
+- **Slurm 25.05 or newer** on the target cluster. QOS entries only appear in
+  the `sacctmgr` dump/load flat-file format from Slurm 25.05 onward; on 24.11
+  and earlier an accounting load silently rejects QOS entries. The module
+  probes `sacctmgr -V` and refuses to run on older releases with a clear
+  message. Supported and tested: **25.05, 25.11, 26.05**.
+- `sacctmgr` on the target host, configured against the cluster's slurmdbd
+  (typically the slurmctld host), reachable over SSH as a Slurm admin.
+- `python3` on the target host (for Ansible).
 
 ## Contents
 
@@ -213,7 +224,7 @@ CI is split by concern:
 
 - **`ci.yml`** — unit tests + ansible-lint, on every push/PR.
 - **`acceptance-management.yml`** — the accounts/users/QOS acceptance suite
-  across Slurm 24.11.7 / 25.05.8 / 25.11.6 / 26.05.1 (pulls the published
+  across Slurm 25.05.8 / 25.11.6 / 26.05.1 (pulls the published
   images), asserting: initial convergence, full idempotency, check-mode
   accuracy (zero false positives + a correct pending-change diff), value
   modification, purge with `normal`/`root` protection, the malformed-file

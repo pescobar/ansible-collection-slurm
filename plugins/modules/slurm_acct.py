@@ -93,6 +93,9 @@ options:
     type: str
     default: sacctmgr
 notes:
+  - Requires Slurm 25.05 or newer (QOS only appear in the sacctmgr flat-file
+    format from 25.05). The module probes C(sacctmgr -V) and refuses to run on
+    older releases. Supported and tested versions are 25.05, 25.11, and 26.05.
   - Must run on a host with sacctmgr configured against the target slurmdbd
     (typically the slurmctld host), as a user with Slurm admin rights.
   - After applying, the module re-dumps the cluster and fails if the live
@@ -160,6 +163,7 @@ import os
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.pescobar.slurm.plugins.module_utils.slurm_acct import (
+    MIN_SLURM_VERSION,
     PROTECTED_ACCOUNTS,
     PROTECTED_USERS,
     SYSTEM_QOS,
@@ -168,12 +172,16 @@ from ansible_collections.pescobar.slurm.plugins.module_utils.slurm_acct import (
     canonical_text,
     compute_plan,
     parse_flat,
+    parse_slurm_version,
     parse_system_qos_show,
     projected_state,
     render,
     render_qos_only,
     resolve,
 )
+
+# Where users are pointed when their Slurm is too old (see check_slurm_version).
+DOCS_URL = "https://github.com/pescobar/ansible-collection-slurm#requirements"
 
 # sacctmgr load reports some mid-file failures with exit code 0 (verified),
 # so every load's output is scanned for its error phrasings too.
@@ -195,6 +203,31 @@ def run_sacctmgr(module, args, check_rc=True):
             stdout=out, stderr=err, rc=rc,
         )
     return rc, out, err
+
+
+def check_slurm_version(module):
+    """Refuse to run on Slurm older than MIN_SLURM_VERSION (read-only probe).
+
+    QOS entries are absent from the sacctmgr dump/load flat-file format before
+    Slurm 25.05, so this collection's QOS engine cannot work there — an
+    accounting load silently rejects QOS lines. Fail early with a clear,
+    actionable message rather than midway through a load.
+    """
+    _, out, err = run_sacctmgr(module, ["-V"], check_rc=False)
+    raw = (out or err or "").strip()
+    version = parse_slurm_version(raw)
+    if version is not None and version < MIN_SLURM_VERSION:
+        module.fail_json(
+            msg="unsupported Slurm version (%s): the pescobar.slurm collection "
+                "requires Slurm %d.%02d or newer. QOS management relies on the "
+                "sacctmgr flat-file (dump/load) format, which only includes QOS "
+                "from Slurm 25.05 onward — older releases silently reject QOS "
+                "entries in an accounting load. Supported and tested versions: "
+                "25.05, 25.11, 26.05. See %s"
+                % (raw or "unknown", MIN_SLURM_VERSION[0], MIN_SLURM_VERSION[1],
+                   DOCS_URL),
+            slurm_version=raw,
+        )
 
 
 def run_load(module, path, clean=False):
@@ -285,6 +318,10 @@ def main():
     )
     purge = module.params["purge"]
     cluster = module.params["cluster"]
+
+    # 0. Refuse unsupported Slurm versions up front (read-only, safe in check
+    # mode) — clearer than failing midway through a QOS load on Slurm < 25.05.
+    check_slurm_version(module)
 
     # 1. Resolve + validate the inventory data. Any structural problem is
     # refused here, before anything touches the cluster: `load ... clean` is

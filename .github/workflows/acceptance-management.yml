@@ -23,7 +23,9 @@ jobs:
       fail-fast: false
       matrix:
         # Keep in sync with build-test-images.yml and tests/docker/build-images.sh.
-        slurm_version: ["24.11.7", "25.05.8", "25.11.6", "26.05.1"]
+        # Slurm 25.05 is the floor (QOS entered the sacctmgr flat-file format
+        # then; the module refuses older releases).
+        slurm_version: ["25.05.8", "25.11.6", "26.05.1"]
 
     steps:
       - uses: actions/checkout@v6

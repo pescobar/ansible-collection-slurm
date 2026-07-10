@@ -55,9 +55,11 @@ User - 'john':Partition='cpu':DefaultAccount='lab_physics':Fairshare=1
 | 13 | `Coordinator='acct1,acct2'` on user lines round-trips and resets when omitted under clean. | Per-account `coordinators` lists are supported (the REST provider cannot manage them at all). |
 | 14 | The `root` account's account-level attributes (fairshare, GrpTRES/Max* limits, allowed/default QOS) are stored on the **Cluster line** in the dump — there is no `Account - 'root'` line. A `load ... clean` whose Cluster line carries those fields sets root's association, and clean **resets** root's fields to the Cluster line's values every run. | `root` is converged by rendering the desired fields onto the Cluster line (declared-keys-only overlay on the live line) and letting the existing clean-load apply them — no special-case `sacctmgr modify` needed. |
 | 15 | The built-in `normal` QOS is **absent from the dump at pristine default** (it only appears once it has a non-default field), but is always readable via `sacctmgr show qos normal`. `sacctmgr modify qos normal set …` persists, is untouched by `clean` (finding 4), and lowercases `Description` exactly like a load. | `normal` is converged in place with `sacctmgr modify` (never a load file — finding 7), and its live state is read via `show` (durations parsed back into the flat-file integer units), so a declared-value comparison is stable even at default. |
+| 16 | **Version floor — QOS entered the flat-file format in Slurm 25.05.** On 24.11.7 `sacctmgr dump` omits QOS entirely (even with a custom QOS defined) and `sacctmgr load` rejects QOS lines: before the `Cluster` line → `You need to specify a cluster name first`; after it → `Misformatted line(N): QOS - …`. Account/user lines still accept `QOS=`/`DefaultQOS=` referencing pre-existing QOS, and the hierarchy load works — only QOS *definitions* are unsupported. | The whole QOS engine (QOS pre-load + reading QOS from the dump) needs 25.05+, so the module probes `sacctmgr -V` at startup (`check_slurm_version` / `MIN_SLURM_VERSION = (25, 5)`) and refuses 24.11 and older with a clear, docs-pointing message rather than failing midway through a load. |
 
 No other behavioral differences were observed across 25.05.4 / 25.11.5 /
-26.05.1. Findings 14–15 verified on 25.05.4 and 25.11.5.
+26.05.1. Findings 14–15 verified on 25.05.4 and 25.11.5; finding 16 verified
+on 24.11.7 (dump/load) vs 25.05.8.
 
 ## The apply sequence
 

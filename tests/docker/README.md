@@ -22,10 +22,13 @@ compose `command:`); only `slurmctld` starts `sshd`.
 
 | Slurm version | Notes                          |
 |---------------|--------------------------------|
-| 24.11.7       | oldest supported               |
-| 25.05.8       |                                |
+| 25.05.8       | oldest supported (25.05 floor) |
 | 25.11.6       |                                |
 | 26.05.1       | newest supported               |
+
+Slurm **25.05 is the hard floor**: QOS entries only appear in the `sacctmgr`
+dump/load flat-file format from 25.05 onward, so the module refuses to run on
+24.11 and earlier (it probes `sacctmgr -V`).
 
 The list lives in three places that must stay in sync: `DEFAULT_VERSIONS` in
 `build-images.sh`, the matrix in

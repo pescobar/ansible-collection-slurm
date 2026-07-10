@@ -5,6 +5,7 @@ import pytest
 
 from slurm_acct import (
     FAIRSHARE_PARENT_SENTINEL,
+    MIN_SLURM_VERSION,
     SYSTEM_QOS_SHOW_FORMAT,
     SlurmAcctError,
     canonical_text,
@@ -12,10 +13,12 @@ from slurm_acct import (
     duration_to_seconds,
     merge_account_fragments,
     parse_flat,
+    parse_slurm_version,
     parse_system_qos_show,
     projected_state,
     render,
     resolve,
+    slurm_version_supported,
 )
 
 
@@ -668,3 +671,32 @@ def test_render_excludes_root_and_system_qos():
     text = render(state)
     assert "'normal':" not in text.replace("QOS='normal'", "")  # only cluster QOS ref
     assert "Account - 'root'" not in text
+
+
+# ---------------------------------------------------------------------------
+# Slurm version guard
+# ---------------------------------------------------------------------------
+
+
+def test_parse_slurm_version():
+    assert parse_slurm_version("slurm 25.05.8") == (25, 5)
+    assert parse_slurm_version("24.11.7") == (24, 11)
+    assert parse_slurm_version("slurm 26.05.1") == (26, 5)
+    assert parse_slurm_version("25.11.6-2ubuntu") == (25, 11)
+    assert parse_slurm_version("no version here") is None
+
+
+def test_min_slurm_version_is_2505():
+    assert MIN_SLURM_VERSION == (25, 5)
+
+
+def test_slurm_version_supported():
+    # too old -> unsupported
+    assert not slurm_version_supported("slurm 24.11.7")
+    assert not slurm_version_supported("slurm 23.11.0")
+    # the floor and newer -> supported
+    assert slurm_version_supported("slurm 25.05.8")
+    assert slurm_version_supported("slurm 25.11.6")
+    assert slurm_version_supported("slurm 26.05.1")
+    # unparseable -> fail open (do not block on odd version strings)
+    assert slurm_version_supported("weird build string")

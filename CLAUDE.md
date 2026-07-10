@@ -16,7 +16,7 @@ future non-accounting Slurm functionality belongs here too. The accounting
 module/role keep the `slurm_acct` name.
 
 **Every behavioral claim in this repo was verified against live clusters**
-(24.11.7 / 25.05.8 / 25.11.6 / 26.05.1) — keep that discipline: when touching engine
+(25.05.8 / 25.11.6 / 26.05.1) — keep that discipline: when touching engine
 behavior, verify against a live container cluster before writing code, and
 record new findings in `docs/design.md`.
 
@@ -39,8 +39,11 @@ record new findings in `docs/design.md`.
 - SSH: `root@127.0.0.1:2222`. Container names are `slurm-ansible-*` so the
   stack coexists with the provider repo's stack; hostnames stay
   `mysql`/`slurmdbd`/`slurmctld` (the vendored slurm.conf references them).
-- Cluster name: `linux`. Supported/CI-tested Slurm versions: 24.11.7,
-  25.05.8, 25.11.6, 26.05.1.
+- Cluster name: `linux`. Supported/CI-tested Slurm versions: 25.05.8, 25.11.6,
+  26.05.1. **Slurm 25.05 is the hard floor** — QOS entered the sacctmgr
+  dump/load flat-file format in 25.05, so the module probes `sacctmgr -V`
+  (`check_slurm_version` / `MIN_SLURM_VERSION`) and refuses 24.11 and older
+  with a clear message pointing at the docs (verified live on 24.11.7).
 
 Dev deps live in a project venv (`.venv/`, gitignored) —
 `python3 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt`

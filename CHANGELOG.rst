@@ -11,7 +11,10 @@ non-accounting Slurm functionality can live in the same collection.
   associations, QOS) via ``sacctmgr`` flat-file dump/load over SSH to the
   slurmctld host, with full check and diff mode support, opt-in purge
   (``slurm_acct_purge``), and unconditional protection from deletion for the
-  ``normal`` QOS and the ``root`` account/user.
+  ``normal`` QOS and the ``root`` account/user. Requires **Slurm 25.05 or
+  newer** (QOS entered the sacctmgr flat-file format in 25.05); the module
+  probes ``sacctmgr -V`` and refuses older releases with a clear message.
+  Supported and tested: 25.05, 25.11, 26.05.
 - In-place convergence of the built-in ``root`` account and ``normal`` QOS:
   declare ``root`` in the accounts data (override fields only — fairshare,
   limits, allowed/default QOS; applied via the cluster association on the

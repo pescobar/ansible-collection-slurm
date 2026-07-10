@@ -17,6 +17,36 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
+import re
+
+# Minimum supported Slurm (major, minor). QOS entries only appear in the
+# sacctmgr dump/load flat-file format from Slurm 25.05 onward; on 24.11 and
+# earlier a load silently rejects QOS lines and a dump omits them, so this
+# collection's QOS engine cannot work there. The module refuses to run below
+# this version. Supported/tested: 25.05, 25.11, 26.05.
+MIN_SLURM_VERSION = (25, 5)
+
+_SLURM_VERSION_RE = re.compile(r"(\d+)\.(\d+)")
+
+
+def parse_slurm_version(text):
+    """`sacctmgr -V` output ('slurm 25.05.8') or a bare version -> (major, minor).
+
+    Returns None if no version can be found (callers should fail open — an
+    unparseable string is not treated as unsupported).
+    """
+    match = _SLURM_VERSION_RE.search(str(text))
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def slurm_version_supported(text):
+    """True if `text` reports Slurm >= MIN_SLURM_VERSION (or is unparseable)."""
+    version = parse_slurm_version(text)
+    return version is None or version >= MIN_SLURM_VERSION
+
+
 # Slurm stores "Fairshare=parent" as INT32_MAX (SLURMDB_FS_USE_PARENT) and
 # `sacctmgr dump` emits the raw sentinel. Verified identical on 25.05/25.11/26.05.
 FAIRSHARE_PARENT_SENTINEL = "2147483647"

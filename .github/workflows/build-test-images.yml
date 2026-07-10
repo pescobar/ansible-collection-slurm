@@ -21,7 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         # Keep in sync with acceptance-management.yml and build-images.sh.
-        slurm_version: ["24.11.7", "25.05.8", "25.11.6", "26.05.1"]
+        # 25.05 is the supported floor (QOS flat-file support starts there).
+        slurm_version: ["25.05.8", "25.11.6", "26.05.1"]
 
     steps:
       - uses: actions/checkout@v6
