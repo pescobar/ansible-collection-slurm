@@ -1,0 +1,40 @@
+name: Build test-cluster images
+
+# Build the self-contained Slurm test images (Slurm compiled from source) and
+# push them to this repository's GitHub Container Registry, where the
+# management-acceptance workflow pulls them from. Run manually from the Actions
+# tab when a Slurm version is added or the image recipe changes — building is
+# slow (~15-20 min each) so it is deliberately NOT part of every-push CI.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build + push Slurm ${{ matrix.slurm_version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with acceptance-management.yml and build-images.sh.
+        slurm_version: ["24.11.7", "25.05.8", "25.11.6", "26.05.1"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" \
+          | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push
+        working-directory: tests/docker
+        env:
+          SLURM_VERSION: ${{ matrix.slurm_version }}
+        run: |
+          tag="ghcr.io/pescobar/ansible-collection-slurm/slurm-test:${SLURM_VERSION}"
+          docker build --build-arg "SLURM_VERSION=${SLURM_VERSION}" -t "$tag" .
+          docker push "$tag"

@@ -8,7 +8,7 @@ declarative mechanism: the desired state is rendered into `sacctmgr`'s
 flat-file format and converged with `sacctmgr -i load`, running **on the
 slurmctld host over SSH**. No slurmrestd, no JWT tokens.
 
-Verified end-to-end against Slurm **25.05.4, 25.11.5, and 26.05.1**. Every
+Verified end-to-end against Slurm **24.11.7, 25.05.8, 25.11.6, and 26.05.1**. Every
 behavioral claim in this README was confirmed against a live cluster —
 see [docs/design.md](docs/design.md) for the full list of verified sacctmgr
 semantics and the version differences found.
@@ -200,18 +200,30 @@ ANSIBLE_COLLECTIONS_PATH=/tmp/collections ansible-lint
 
 # full acceptance suite against a local docker cluster over SSH:
 ./tests/docker/generate-ssh-key.sh
-SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --wait --build
+SLURM_VERSION=25.05.8 docker compose -f tests/docker/docker-compose.yml up -d --wait --build
 ./tests/acceptance/run-tests.sh
 ```
 
-CI (`.github/workflows/ci.yml`) runs the unit tests, ansible-lint, and the
-acceptance suite across Slurm 25.05.4 / 25.11.5 / 26.05.1, asserting:
-initial convergence, full idempotency, check-mode accuracy (zero false
-positives + a correct pending-change diff), value modification, purge with
-`normal`/`root` protection, the malformed-file guard, and the
-`fairshare=parent` round-trip. Two companion scripts run alongside it: the
-importer round-trip (`tests/acceptance/import-roundtrip.sh`) and the in-place
-`root`/`normal` convergence test (`tests/acceptance/root-normal.sh`).
+The test-cluster image is self-contained (Slurm compiled from source) and
+published to `ghcr.io/pescobar/ansible-collection-slurm/slurm-test:<version>`;
+see [`tests/docker/README.md`](tests/docker/README.md) for building and
+publishing images.
+
+CI is split by concern:
+
+- **`ci.yml`** — unit tests + ansible-lint, on every push/PR.
+- **`acceptance-management.yml`** — the accounts/users/QOS acceptance suite
+  across Slurm 24.11.7 / 25.05.8 / 25.11.6 / 26.05.1 (pulls the published
+  images), asserting: initial convergence, full idempotency, check-mode
+  accuracy (zero false positives + a correct pending-change diff), value
+  modification, purge with `normal`/`root` protection, the malformed-file
+  guard, and the `fairshare=parent` round-trip; plus the importer round-trip
+  (`import-roundtrip.sh`) and the in-place `root`/`normal` test
+  (`root-normal.sh`).
+- **`build-test-images.yml`** — builds and pushes the test images to GHCR
+  (manual trigger).
+
+A future acceptance workflow will cover the planned Slurm **install** role.
 
 ## Importing from an existing cluster
 

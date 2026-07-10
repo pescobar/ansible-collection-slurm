@@ -1,0 +1,86 @@
+name: Acceptance — accounts/users/QOS management
+
+# End-to-end tests for the slurm_acct role/module: converge accounts, users,
+# associations and QOS against a live Slurm control plane over SSH, across every
+# supported Slurm version. The cluster comes from the pre-built, self-contained
+# images published by the "Build test-cluster images" workflow — this job only
+# PULLS them (no per-run source compile). A future install-role acceptance
+# workflow will live alongside this one.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  acceptance:
+    name: Slurm ${{ matrix.slurm_version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with build-test-images.yml and tests/docker/build-images.sh.
+        slurm_version: ["24.11.7", "25.05.8", "25.11.6", "26.05.1"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-core
+        run: pip install ansible-core
+
+      - name: Generate SSH test keypair
+        run: ./tests/docker/generate-ssh-key.sh
+
+      # Pull the published, self-contained image and start the cluster. The
+      # image carries no SSH key; slurmctld installs the generated one at
+      # runtime (ENABLE_SSHD=true + bind mount, see docker-compose.yml).
+      - name: Start Slurm cluster
+        env:
+          SLURM_VERSION: ${{ matrix.slurm_version }}
+        run: |
+          docker compose -f tests/docker/docker-compose.yml pull
+          docker compose -f tests/docker/docker-compose.yml up -d --wait
+
+      - name: Wait for slurmctld to be ready
+        run: |
+          echo "Waiting for slurmctld..."
+          for i in $(seq 1 36); do
+            if docker exec slurm-ansible-slurmctld scontrol ping &>/dev/null 2>&1; then
+              echo "slurmctld ready."
+              break
+            fi
+            echo "  attempt $i/36 — sleeping 5s"
+            sleep 5
+          done
+          docker exec slurm-ansible-slurmctld scontrol ping
+
+      - name: Print Slurm version
+        run: docker exec slurm-ansible-slurmctld sacctmgr -V
+
+      # -----------------------------------------------------------------------
+      # Run the acceptance suite over SSH (production-like: no docker connection
+      # plugin, no local execution — see the scripts for the asserted scenarios)
+      # -----------------------------------------------------------------------
+      - name: Run acceptance tests over SSH
+        run: ./tests/acceptance/run-tests.sh
+
+      - name: Importer round-trip test
+        run: ./tests/acceptance/import-roundtrip.sh
+
+      - name: In-place root account + normal QOS test
+        run: ./tests/acceptance/root-normal.sh
+
+      - name: Collect Docker logs on failure
+        if: failure()
+        run: |
+          for svc in slurm-ansible-mysql slurm-ansible-slurmdbd slurm-ansible-slurmctld; do
+            echo "=== $svc ==="
+            docker logs "$svc" 2>&1 | tail -50 || true
+          done

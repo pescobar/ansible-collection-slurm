@@ -16,24 +16,31 @@ future non-accounting Slurm functionality belongs here too. The accounting
 module/role keep the `slurm_acct` name.
 
 **Every behavioral claim in this repo was verified against live clusters**
-(25.05.4 / 25.11.5 / 26.05.1) — keep that discipline: when touching engine
+(24.11.7 / 25.05.8 / 25.11.6 / 26.05.1) — keep that discipline: when touching engine
 behavior, verify against a live container cluster before writing code, and
 record new findings in `docs/design.md`.
 
 ## Test environment
 
 - Self-contained compose stack in `tests/docker/`: mariadb + slurmdbd +
-  slurmctld. slurmctld runs an overlay image (built by
-  `tests/docker/Dockerfile` FROM the public
-  `ghcr.io/pescobar/slurm-test:<version>` images, which are produced by the
-  sibling provider repo) adding **openssh-server + python3** (the base image
-  has neither) and a throwaway test key (`./tests/docker/generate-ssh-key.sh`,
-  output gitignored).
+  slurmctld. slurmdbd and slurmctld share ONE **self-contained** image
+  (`tests/docker/Dockerfile` compiles Slurm from the SchedMD source tarball —
+  recipe adapted from the sibling provider's `docker/`; the config is vendored
+  under `tests/docker/config/`), adding **openssh-server + python3** for the
+  Ansible-over-SSH tests. Published to
+  `ghcr.io/pescobar/ansible-collection-slurm/slurm-test:<version>` by the
+  `build-test-images.yml` workflow; the acceptance CI PULLS it (no per-run
+  compile). No dependency on the provider repo's images anymore. See
+  `tests/docker/README.md`.
+- SSH key: the published image carries **none** (safe to publish). The
+  throwaway key from `./tests/docker/generate-ssh-key.sh` (gitignored) is
+  bind-mounted into slurmctld at runtime (`/run/ssh-pubkey/authorized_keys`)
+  and installed by the entrypoint when `ENABLE_SSHD=true`.
 - SSH: `root@127.0.0.1:2222`. Container names are `slurm-ansible-*` so the
   stack coexists with the provider repo's stack; hostnames stay
-  `mysql`/`slurmdbd`/`slurmctld` (the baked-in slurm.conf references them).
-- Cluster name: `linux`. Supported/CI-tested Slurm versions: 25.05.4,
-  25.11.5, 26.05.1.
+  `mysql`/`slurmdbd`/`slurmctld` (the vendored slurm.conf references them).
+- Cluster name: `linux`. Supported/CI-tested Slurm versions: 24.11.7,
+  25.05.8, 25.11.6, 26.05.1.
 
 Dev deps live in a project venv (`.venv/`, gitignored) —
 `python3 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt`
@@ -42,7 +49,7 @@ Dev deps live in a project venv (`.venv/`, gitignored) —
 
 ```sh
 ./tests/docker/generate-ssh-key.sh
-SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --wait --build
+SLURM_VERSION=25.05.8 docker compose -f tests/docker/docker-compose.yml up -d --wait --build
 ./tests/acceptance/run-tests.sh          # 7-scenario converge/purge suite
 ./tests/acceptance/import-roundtrip.sh   # importer round-trip (converge → import → --check no-op)
 ./tests/acceptance/root-normal.sh        # in-place root account + normal QOS convergence
