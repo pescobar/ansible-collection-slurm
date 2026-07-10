@@ -225,8 +225,22 @@ SLURM_VERSION=25.05.8 docker compose -f tests/docker/docker-compose.yml up -d --
   25.11.5; unit tests + a dedicated acceptance script
   (`tests/acceptance/root-normal.sh`, separate from the 7-scenario suite).
 - WCKey removal (currently stop-managing only).
-- Non-accounting Slurm functionality (the reason the collection is named
-  `pescobar.slurm`).
+- **Slurm install role** (planned — the reason the collection is named
+  `pescobar.slurm`, not `slurm_acct`). CI decision already made: it gets its
+  own workflow `acceptance-install.yml`, kept separate from
+  `acceptance-management.yml` (the accounts/users/QOS suite). Use **tier 1 —
+  run the role directly on the GitHub-hosted runner VM** (`hosts: localhost`,
+  `connection: local`): the runner is a real ephemeral VM with systemd and a
+  real package manager, so it exercises the actual install path (packages +
+  systemd unit start) far more faithfully than a container — matrix over the
+  OS runner images (`ubuntu-22.04`, `ubuntu-24.04`). Only reach for tier 2
+  (Vagrant + libvirt/KVM real VMs; `/dev/kvm` is available on Linux runners)
+  if distros the runner images don't provide (RHEL/Rocky/…) or multi-node must
+  be covered. NOT a container job — the management suite uses containers only
+  because it just needs a *running* cluster to talk to, with no install to
+  exercise.
+- Non-accounting Slurm functionality generally (same rationale as the install
+  role).
 
 ## Conventions
 
