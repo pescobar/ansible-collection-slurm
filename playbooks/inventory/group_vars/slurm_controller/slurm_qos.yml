@@ -1,7 +1,15 @@
 ---
 # Cluster-wide QOS definitions. Mirrors examples/big-cluster/qos.tf of
-# terraform-provider-slurm. Never declare Slurm's built-in `normal` QOS here
-# (the module refuses it).
+# terraform-provider-slurm.
+#
+# The built-in `normal` QOS is never created or deleted, but you MAY converge
+# its fields in place by declaring it here — they are applied with
+# `sacctmgr modify` (never a load file), declared-keys-only:
+#
+#   normal:
+#     priority: 0
+#     max_wall_pj: 1440
+#     flags: [DenyOnLimit]
 slurm_acct_qos:
   short:
     description: Short jobs, fast turnaround

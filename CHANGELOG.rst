@@ -10,8 +10,14 @@ non-accounting Slurm functionality can live in the same collection.
 - ``slurm_acct`` module: declarative Slurm accounting (accounts, users,
   associations, QOS) via ``sacctmgr`` flat-file dump/load over SSH to the
   slurmctld host, with full check and diff mode support, opt-in purge
-  (``slurm_acct_purge``), and unconditional protection for the ``normal``
-  QOS and the ``root`` account/user.
+  (``slurm_acct_purge``), and unconditional protection from deletion for the
+  ``normal`` QOS and the ``root`` account/user.
+- In-place convergence of the built-in ``root`` account and ``normal`` QOS:
+  declare ``root`` in the accounts data (override fields only — fairshare,
+  limits, allowed/default QOS; applied via the cluster association on the
+  clean-load) or ``normal`` in ``slurm_acct_qos`` (applied with
+  ``sacctmgr modify``, never a load file). Both are declared-keys-only and are
+  still never created or deleted. Verified live on 25.05.4 and 25.11.5.
 - ``slurm_acct`` role wrapping the module behind ``slurm_acct_*`` inventory
   variables (account-centric data model shared with
   terraform-provider-slurm's ``examples/big-cluster``).

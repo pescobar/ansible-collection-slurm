@@ -23,7 +23,8 @@ description:
     (the second pass re-applies WCKeys, which C(clean) drops — verified
     behavior), then deletes undeclared QOS and orphaned zero-association
     users/accounts. The built-in C(normal) QOS and the C(root) account/user
-    are never touched.
+    are never created or deleted, but their attributes MAY be converged in
+    place when declared (see I(qos) and I(accounts)).
   - The rendered file is structurally validated first (parents defined before
     children, no undeclared QOS references, safe quoting) because
     C(load ... clean) is not transactional — a file that errors midway has
@@ -40,7 +41,10 @@ options:
       - Map of QOS name to definition. Keys per QOS — C(description),
         C(priority), C(max_wall_pj) (minutes), C(grace_time) (seconds),
         C(flags) (list), C(max_jobs_per_user), C(max_tres_per_job).
-      - Slurm's built-in C(normal) QOS must not be declared here.
+      - Slurm's built-in C(normal) QOS MAY be declared to converge its fields
+        in place (applied with C(sacctmgr modify), never a load file, and never
+        deleted). Only the declared fields are managed; omitted fields are left
+        as-is.
     type: dict
     default: {}
   accounts:
@@ -52,6 +56,13 @@ options:
         C(coordinators), and a C(user_associations) list whose entries are a
         bare username or a map with C(user), C(account_overrides), and
         C(association) keys.
+      - The built-in C(root) account MAY be declared to converge its
+        account-level attributes (C(fairshare), C(default_qos), C(allowed_qos),
+        C(max_jobs), and TRES limits — the fields that live on the cluster
+        association). No C(parent_account), C(user_associations),
+        C(coordinators), or metadata are accepted for C(root), and it is never
+        deleted. Only declared fields are managed; omitted fields are left
+        as-is.
     type: dict
     default: {}
   admin_levels:
@@ -138,6 +149,11 @@ deleted_accounts:
   description: Orphaned accounts deleted by the purge step.
   returned: when purging
   type: list
+modified_system_qos:
+  description: Built-in QOS (e.g. normal) whose fields were converged in place,
+    mapped to the list of fields changed.
+  returned: when a system QOS changed
+  type: dict
 """
 
 import os
@@ -147,10 +163,12 @@ from ansible_collections.pescobar.slurm.plugins.module_utils.slurm_acct import (
     PROTECTED_ACCOUNTS,
     PROTECTED_USERS,
     SYSTEM_QOS,
+    SYSTEM_QOS_SHOW_FORMAT,
     SlurmAcctError,
     canonical_text,
     compute_plan,
     parse_flat,
+    parse_system_qos_show,
     projected_state,
     render,
     render_qos_only,
@@ -232,7 +250,23 @@ def read_live_state(module, cluster):
     live_users = listing("user", "user")
     live_accounts = listing("account", "account")
     live_qos = listing("qos", "name")
-    return live, live_users, live_accounts, live_qos
+
+    # Built-in system QOS (e.g. normal) live state: read via `show`, not the
+    # dump — a pristine-default `normal` is absent from the dump, which would
+    # make declared-value comparisons unstable. show always prints every
+    # requested column, so the record is complete.
+    _, out, _ = run_sacctmgr(module, ["-nP", "show", "qos"]
+                             + list(SYSTEM_QOS)
+                             + ["format=%s" % ",".join(SYSTEM_QOS_SHOW_FORMAT)])
+    live_system_qos = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        cols = dict(zip(SYSTEM_QOS_SHOW_FORMAT, line.split("|")))
+        live_system_qos[cols["Name"]] = parse_system_qos_show(cols)
+    live["system_qos"] = live_system_qos
+
+    return live, live_users, live_accounts, live_qos, live_system_qos
 
 
 def main():
@@ -273,17 +307,26 @@ def main():
         )
 
     # 2. Read live state (read-only, safe in check mode).
-    live, live_users, live_accounts, live_qos = read_live_state(module, cluster)
+    live, live_users, live_accounts, live_qos, live_system_qos = read_live_state(
+        module, cluster)
 
-    # Adopt the live Cluster line: cluster-level defaults (fairshare, default
-    # QOS list) are deliberately not managed by this module.
+    # Start from the live Cluster line (cluster/root-level fields we don't
+    # manage are left as-is) and overlay the inventory-declared `root` account
+    # fields — they live on the Cluster line and the hierarchy clean-load
+    # applies them (verified). Declared-keys-only: undeclared fields persist.
+    live_root = dict(live["cluster"]["fields"])
     if live["cluster"]["name"]:
-        desired["cluster"] = live["cluster"]
+        merged = dict(live["cluster"]["fields"])
+        merged.update(desired["root"])
+        desired["cluster"] = {"name": live["cluster"]["name"], "fields": merged}
+    else:
+        desired["cluster"]["fields"].update(desired["root"])
 
     # 3. Plan.
     plan = compute_plan(desired, live, purge,
                         live_users=live_users, live_accounts=live_accounts,
-                        live_qos=live_qos)
+                        live_qos=live_qos, live_root=live_root,
+                        live_system_qos=live_system_qos)
 
     # The file handed to `load ... clean` in both modes:
     #  - purge: exactly the inventory, rendered authoritatively (explicit
@@ -360,6 +403,18 @@ def main():
         os.unlink(load_path)
         result["loaded"] = True
 
+    # 4d. Built-in system QOS (normal): converged in place with
+    # `sacctmgr modify` — never written to a load file (a differing built-in
+    # QOS line silently aborts a load mid-file — finding 7). Independent of the
+    # load passes and of `clean` (which never touches QOS — finding 4).
+    modified_system_qos = {}
+    for name, changed in sorted(plan["system_qos"].items()):
+        set_args = ["%s=%s" % (key, value) for key, value in sorted(changed.items())]
+        run_sacctmgr(module, ["-i", "modify", "qos", name, "set"] + set_args)
+        modified_system_qos[name] = sorted(changed)
+    if modified_system_qos:
+        result["modified_system_qos"] = modified_system_qos
+
     # 5. Purge steps `clean` cannot do: QOS are global (never deleted by
     # clean), and removing an entity's last association leaves an orphaned
     # zero-association entity behind.
@@ -387,10 +442,12 @@ def main():
 
     # 6. Convergence check: re-read and re-plan. Anything still pending means
     # a semantic this collection doesn't model on this Slurm version.
-    live2, live_users2, live_accounts2, live_qos2 = read_live_state(module, cluster)
+    live2, live_users2, live_accounts2, live_qos2, live_system_qos2 = read_live_state(
+        module, cluster)
     plan2 = compute_plan(desired, live2, purge,
                          live_users=live_users2, live_accounts=live_accounts2,
-                         live_qos=live_qos2)
+                         live_qos=live_qos2, live_root=live2["cluster"]["fields"],
+                         live_system_qos=live_system_qos2)
     if plan2["changed"]:
         module.fail_json(
             msg="cluster did not converge after apply — the live state still "

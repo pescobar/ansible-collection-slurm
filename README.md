@@ -160,10 +160,15 @@ Two things this collection manages that the REST API cannot:
 
 ### Protections (unconditional)
 
-- The built-in **`normal` QOS** can neither be declared, modified, nor
-  deleted.
-- The **`root` account and `root` user** are always rendered into the load
-  file and excluded from every deletion path.
+- The built-in **`normal` QOS** is never created or deleted. It MAY be
+  converged in place: declared in `slurm_acct_qos` its fields are applied with
+  `sacctmgr modify` (never a load file), declared-keys-only.
+- The **`root` account and `root` user** are never deleted (root is always
+  rendered into the load file and excluded from every deletion path). The
+  `root` account's account-level attributes (fairshare, limits, allowed /
+  default QOS) MAY be converged by declaring `root` in the accounts data with
+  those override fields — they live on the cluster association and are applied
+  by the clean-load, declared-keys-only.
 - Structurally invalid data (an undeclared `parent_account`, a QOS
   reference not in `slurm_acct_qos`, a duplicate association, a
   multi-account user without a `default_accounts` pin, values containing
@@ -204,7 +209,9 @@ acceptance suite across Slurm 25.05.4 / 25.11.5 / 26.05.1, asserting:
 initial convergence, full idempotency, check-mode accuracy (zero false
 positives + a correct pending-change diff), value modification, purge with
 `normal`/`root` protection, the malformed-file guard, and the
-`fairshare=parent` round-trip.
+`fairshare=parent` round-trip. Two companion scripts run alongside it: the
+importer round-trip (`tests/acceptance/import-roundtrip.sh`) and the in-place
+`root`/`normal` convergence test (`tests/acceptance/root-normal.sh`).
 
 ## Importing from an existing cluster
 
@@ -242,6 +249,4 @@ ansible-playbook -i imported_inventory/hosts.yml site.yml --check --diff
 
 ## Roadmap
 
-- Managing the built-in `root` account and `normal` QOS in place (configure,
-  never delete) — planned.
 - Non-accounting Slurm functionality (hence the collection name).

@@ -21,7 +21,10 @@ __metaclass__ = type
 # `sacctmgr dump` emits the raw sentinel. Verified identical on 25.05/25.11/26.05.
 FAIRSHARE_PARENT_SENTINEL = "2147483647"
 
-# Built-in QOS that must never be created, modified, or deleted by us.
+# Built-in QOS that must never be created or deleted by us. They MAY be
+# converged in place: declared in the `qos` map they are applied field-by-field
+# with `sacctmgr modify` (never written to a load file — a differing built-in
+# QOS line silently aborts a load mid-file, finding 7), and never deleted.
 SYSTEM_QOS = ("normal",)
 
 # Built-in entities that must never be deleted, no matter what the
@@ -171,6 +174,67 @@ def canon_value(key, value):
         # Description='Biology Lab' dumps back as 'biology lab').
         return v.lower()
     return v
+
+
+# Built-in QOS live state is read with `sacctmgr show qos` (not the dump: a
+# pristine-default `normal` is absent from the dump). These are the show
+# columns parse_system_qos_show() consumes, in order.
+SYSTEM_QOS_SHOW_FORMAT = ("Name", "Description", "Priority", "MaxWall",
+                          "GraceTime", "Flags", "MaxJobsPU", "MaxTRESPerJob")
+
+
+def duration_to_seconds(text):
+    """sacctmgr duration display -> int seconds (None if unset/unlimited).
+
+    Accepts the `[D-]HH:MM:SS` form `sacctmgr show` emits and a plain integer
+    count. Used to normalize built-in-QOS limits read via `show` back into the
+    flat-file integer units this collection compares in.
+    """
+    t = str(text).strip()
+    if not t or t.upper() == "UNLIMITED":
+        return None
+    if t.lstrip("-").isdigit():
+        return int(t)
+    days = 0
+    if "-" in t:
+        d, _, t = t.partition("-")
+        days = int(d)
+    bits = [int(x) for x in t.split(":")]
+    while len(bits) < 3:
+        bits.insert(0, 0)
+    hours, minutes, seconds = bits[-3], bits[-2], bits[-1]
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def parse_system_qos_show(cols):
+    """`sacctmgr -nP show qos` row (column->value dict) -> canonical fields.
+
+    Same normalization as parse_flat(), plus duration conversion: MaxWall to
+    minutes and GraceTime to seconds (the flat-file units), so a declared
+    system-QOS spec compares equal to the live definition. Unset columns are
+    omitted; GraceTime=0 is treated as unset (the dump omits it too).
+    """
+    fields = {}
+    desc = cols.get("Description", "")
+    if desc:
+        fields["Description"] = desc.lower()
+    if cols.get("Priority", "") != "":
+        fields["Priority"] = str(cols["Priority"])
+    wall = duration_to_seconds(cols.get("MaxWall", ""))
+    if wall is not None:
+        fields["MaxWallDurationPerJob"] = str(wall // 60)
+    grace = duration_to_seconds(cols.get("GraceTime", ""))
+    if grace:
+        fields["GraceTime"] = str(grace)
+    flags = canon_list(cols.get("Flags", ""))
+    if flags:
+        fields["Flags"] = flags
+    if cols.get("MaxJobsPU", "") != "":
+        fields["MaxJobsPU"] = str(cols["MaxJobsPU"])
+    tres = canon_tres(cols.get("MaxTRESPerJob", ""))
+    if tres:
+        fields["MaxTRESPerJob"] = tres
+    return fields
 
 
 def tres_to_string(value, context):
@@ -357,6 +421,8 @@ def resolve(cluster, qos=None, accounts=None, admin_levels=None,
     state = {
         "cluster": {"name": str(cluster), "fields": {"Fairshare": "1", "QOS": "normal"}},
         "qos": {},
+        "system_qos": {},
+        "root": {},
         "accounts": {},
         "assocs": {},
         "users": {},
@@ -364,12 +430,6 @@ def resolve(cluster, qos=None, accounts=None, admin_levels=None,
 
     # ---- QOS ----
     for name in sorted(qos):
-        if name in SYSTEM_QOS:
-            errors.append(
-                "qos %r: Slurm's built-in system QOS must not be managed here "
-                "(see the provider's Bug 3 / system-QOS notes)" % name
-            )
-            continue
         _check_token(name, "qos name", errors)
         spec = qos[name] or {}
         fields = {}
@@ -384,9 +444,18 @@ def resolve(cluster, qos=None, accounts=None, admin_levels=None,
                 fields[QOS_FIELDS[key]] = _field_value(key, spec[key], "qos %r" % name)
             except SlurmAcctError as exc:
                 errors.extend(exc.errors)
-        fields.setdefault("Description", str(name).lower())
-        _check_token(fields["Description"], "qos %r description" % name, errors)
-        state["qos"][str(name)] = fields
+        if "Description" in fields:
+            _check_token(fields["Description"], "qos %r description" % name, errors)
+        if name in SYSTEM_QOS:
+            # Built-in QOS (e.g. `normal`): converged in place via
+            # `sacctmgr modify`, never written to a load file. Declared-keys
+            # only — an omitted field is left as-is, so no Description default
+            # (Slurm ships its own, and we never reset system-QOS fields).
+            state["system_qos"][str(name)] = fields
+        else:
+            fields.setdefault("Description", str(name).lower())
+            _check_token(fields["Description"], "qos %r description" % name, errors)
+            state["qos"][str(name)] = fields
 
     declared_qos = set(state["qos"]) | set(SYSTEM_QOS)
 
@@ -406,10 +475,28 @@ def resolve(cluster, qos=None, accounts=None, admin_levels=None,
 
     for name in sorted(accounts):
         if name in PROTECTED_ACCOUNTS:
-            errors.append(
-                "account %r is Slurm's built-in root account and cannot be "
-                "declared in the accounts map" % name
-            )
+            # root is the implicit top of the tree; its account-level
+            # attributes live on the Cluster line in the dump (verified) and
+            # are converged by the hierarchy clean-load, never created or
+            # deleted. Only the override fields (fairshare, limits, allowed /
+            # default QOS) are managed here — no parent, members, or metadata.
+            spec = accounts[name] or {}
+            root_fields = {}
+            for key in sorted(spec):
+                target = ACCOUNT_OVERRIDE_FIELDS.get(key)
+                if target is None:
+                    errors.append(
+                        "account 'root': only %s may be set on the built-in "
+                        "root account (got %r)"
+                        % (", ".join(sorted(ACCOUNT_OVERRIDE_FIELDS)), key)
+                    )
+                    continue
+                try:
+                    root_fields[target] = _field_value(key, spec[key], "account 'root'")
+                except SlurmAcctError as exc:
+                    errors.extend(exc.errors)
+            _check_qos_refs(root_fields, "account 'root'")
+            state["root"] = root_fields
             continue
         _check_token(name, "account name", errors)
         spec = accounts[name] or {}
@@ -739,8 +826,8 @@ def parse_flat(text):
     lists sorted, TRES lists sorted, key aliases canonicalized, quotes
     stripped. A parsed dump and a parsed render of in-sync data compare equal.
     """
-    state = {"cluster": {"name": "", "fields": {}}, "qos": {}, "accounts": {},
-             "assocs": {}, "users": {}}
+    state = {"cluster": {"name": "", "fields": {}}, "qos": {}, "system_qos": {},
+             "root": {}, "accounts": {}, "assocs": {}, "users": {}}
     parent = "root"
     errors = []
 
@@ -846,12 +933,15 @@ def _assoc_key_str(key):
 
 
 def compute_plan(desired, live, purge, live_users=None, live_accounts=None,
-                 live_qos=None):
+                 live_qos=None, live_root=None, live_system_qos=None):
     """Compare desired vs live records and produce the full action plan.
 
     live_users / live_accounts are complete entity lists (from `sacctmgr show`)
     used to find zero-association orphans, which never appear in a dump.
     live_qos is the authoritative live QOS list for the purge step.
+    live_root is the live Cluster-line field dict (where root's account-level
+    attributes live); live_system_qos maps built-in QOS name -> live fields
+    (from `sacctmgr show`). Both compare declared-keys-only.
     """
     plan = {}
     # QOS definition fields never reset when omitted from a load file
@@ -912,9 +1002,28 @@ def compute_plan(desired, live, purge, live_users=None, live_accounts=None,
             if a not in live["accounts"] and a not in PROTECTED_ACCOUNTS
             and (purge or a in desired["accounts"]))
 
-    # The Cluster line itself (cluster-level fairshare / default QOS list) is
-    # deliberately not managed: the module re-renders whatever the live
-    # cluster line says, so site-tuned cluster defaults are never fought over.
+    # Root account: its attributes live on the Cluster line (verified), so a
+    # declared root field is converged by re-rendering that line and letting
+    # the hierarchy clean-load apply it. Declared-keys-only in both modes —
+    # undeclared cluster-line fields (site-tuned defaults) are left untouched.
+    plan["root"] = {"update": []}
+    if live_root is not None:
+        for key, value in sorted(desired.get("root", {}).items()):
+            if live_root.get(key) != value:
+                plan["root"]["update"].append(key)
+
+    # Built-in system QOS (e.g. normal): converged with `sacctmgr modify`,
+    # independent of any load. Declared-keys-only (system-QOS fields never
+    # reset when omitted — finding 10), and never a delete.
+    plan["system_qos"] = {}
+    if live_system_qos is not None:
+        for name, fields in sorted(desired.get("system_qos", {}).items()):
+            live_fields = live_system_qos.get(name, {})
+            changed = {k: v for k, v in sorted(fields.items())
+                       if live_fields.get(k) != v}
+            if changed:
+                plan["system_qos"][name] = changed
+
     file_changes = any(
         plan[section][action]
         for section in ("qos", "accounts", "assocs", "users")
@@ -924,10 +1033,13 @@ def compute_plan(desired, live, purge, live_users=None, live_accounts=None,
         plan[section]["delete"]
         for section in ("qos", "accounts", "assocs", "users")
     ) or bool(plan["orphan_users"]) or bool(plan["orphan_accounts"])
+    root_changed = bool(plan["root"]["update"])
+    system_qos_changed = bool(plan["system_qos"])
 
-    plan["needs_load"] = file_changes or (purge and any(
+    plan["needs_load"] = file_changes or root_changed or (purge and any(
         plan[section]["delete"] for section in ("accounts", "assocs", "users")))
-    plan["changed"] = file_changes or (purge and deletions)
+    plan["changed"] = (file_changes or root_changed or system_qos_changed
+                       or (purge and deletions))
     return plan
 
 
@@ -943,6 +1055,13 @@ def canonical_text(state, extra_orphan_users=(), extra_orphan_accounts=()):
     render byte-identical.
     """
     lines = []
+    cluster = state.get("cluster") or {}
+    if cluster.get("fields"):
+        lines.append("Cluster %s: %s"
+                     % (cluster.get("name", ""), _fields_str(cluster["fields"])))
+    for name in sorted(state.get("system_qos", {})):
+        lines.append("SystemQOS %s: %s"
+                     % (name, _fields_str(state["system_qos"][name])))
     for name in sorted(state["qos"]):
         lines.append("QOS %s: %s" % (name, _fields_str(state["qos"][name])))
     for name in sorted(state["accounts"]):
@@ -970,7 +1089,17 @@ def projected_state(desired, live, purge):
     result = {
         "cluster": desired["cluster"],
         "qos": {}, "accounts": {}, "assocs": {}, "users": {},
+        "system_qos": {},
     }
+
+    # Built-in QOS: declared fields overlaid on the live definition (they are
+    # only ever modified in place, never deleted, in either mode).
+    for name, rec in desired.get("system_qos", {}).items():
+        base = dict(live.get("system_qos", {}).get(name, {}))
+        base.update(rec)
+        result["system_qos"][name] = base
+    for name, rec in live.get("system_qos", {}).items():
+        result["system_qos"].setdefault(name, rec)
 
     def _merge_onto_live(desired_rec, live_rec):
         # additive/QOS semantics: only declared keys change; live-only keys

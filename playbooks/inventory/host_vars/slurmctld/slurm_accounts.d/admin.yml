@@ -4,6 +4,17 @@
 # slurm_acct_accounts (default slurm_acct_accounts_dir), failing if an account
 # name appears in two files. The `.d` suffix keeps Ansible from auto-loading
 # these as host vars — see the role's defaults/main.yml.
+#
+# The built-in `root` account is never created or deleted, but you MAY converge
+# its account-level attributes in place by declaring `root` here with override
+# fields only (fairshare, limits, allowed/default QOS — no parent, members, or
+# metadata). They live on the cluster association and are applied by the
+# clean-load, declared-keys-only. Put it in its own file, e.g. root.yml:
+#
+#   root:
+#     fairshare: 1
+#     allowed_qos: [normal, standard, high]
+#     default_qos: normal
 admin:
   description: Cluster administration
   organization: it

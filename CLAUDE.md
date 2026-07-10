@@ -45,6 +45,7 @@ Dev deps live in a project venv (`.venv/`, gitignored) —
 SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --wait --build
 ./tests/acceptance/run-tests.sh          # 7-scenario converge/purge suite
 ./tests/acceptance/import-roundtrip.sh   # importer round-trip (converge → import → --check no-op)
+./tests/acceptance/root-normal.sh        # in-place root account + normal QOS convergence
 .venv/bin/python -m pytest tests/unit/   # pure logic, no cluster
 ```
 
@@ -127,9 +128,14 @@ SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --
   remove ≠ reset — matches the provider's Optional-only semantics). Purge
   mode compares exactly (clean verifiably resets omitted assoc fields).
 - QOS fields compare declared-keys-only in BOTH modes: QOS definition fields
-  never reset when omitted from a load file (verified).
-- The Cluster line and root's own attributes are never managed (live values
-  re-rendered as-is).
+  never reset when omitted from a load file (verified). The built-in `normal`
+  QOS is the same: declared in the `qos` map it is converged via `sacctmgr
+  modify` (finding 15), never a load file, never deleted.
+- The Cluster line's fields are re-rendered from the live dump as-is, EXCEPT
+  the inventory-declared `root`-account override fields, which are overlaid
+  onto it (declared-keys-only) and applied by the clean-load — that is how
+  root's account-level attributes are managed (finding 14). Undeclared
+  cluster-level defaults are still never fought over.
 
 ## Bugs found and fixed (all verified on live clusters)
 
@@ -163,9 +169,11 @@ SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --
   committed sample is never modified. Account edits now add/remove/patch
   per-account files under `host_vars/slurmctld/slurm_accounts.d/` (not one
   dict). It asserts 7 scenarios; keep them in sync with the README's CI
-  description when adding phases. The importer round-trip is a separate
-  script (`tests/acceptance/import-roundtrip.sh`), deliberately NOT an 8th
-  scenario, so the count stays 7.
+  description when adding phases. The importer round-trip
+  (`tests/acceptance/import-roundtrip.sh`) and the in-place root/normal test
+  (`tests/acceptance/root-normal.sh`, self-contained inventory declaring only
+  `root` + `normal`) are deliberately separate scripts, NOT extra scenarios,
+  so the run-tests.sh count stays 7.
 - `sacctmgr dump` emits only explicitly-stored values (inherited values do
   not appear on member lines), and emits user-global fields (DefaultAccount,
   AdminLevel, WCKeys, Coordinator) repeated on every line of the same user.
@@ -197,13 +205,18 @@ SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --
   (`tests/acceptance/import-roundtrip.sh`).
   Not yet done: per-account `coordinators` (warns; `Coordinator` is
   user-global in the dump).
-- **Configure `root`/`normal` in place** (requested, not yet built): lift the
-  declaration refusals in `resolve()` for the `root` account and `normal`
-  QOS while keeping the deletion guard, converging their declared fields via
-  targeted `sacctmgr modify` (not the load file — avoids finding 7 and root's
-  special-casing). Scope agreed: root fairshare + account limits + cluster
-  default/allowed QOS (NOT root-user AdminLevel); all QOS fields for `normal`.
-  Verify `modify` persistence live on 25.05 + 25.11 first.
+- **Configure `root`/`normal` in place** (DONE): the declaration refusals in
+  `resolve()` are lifted (deletion guard kept). `root` is declared in the
+  `accounts` map with override fields only (fairshare, limits, allowed/default
+  QOS) → its attributes live on the **Cluster line** (finding 14), so the
+  existing clean-load applies them; no separate `modify` was needed. `normal`
+  is declared in the `qos` map → routed to `state["system_qos"]` and converged
+  with `sacctmgr modify` (finding 15, never a load file — avoids finding 7),
+  its live state read via `sacctmgr show qos` + duration parsing. Both are
+  declared-keys-only (omitted fields left as-is) and never deleted. Root-user
+  AdminLevel is deliberately still not managed. Live-verified on 25.05.4 +
+  25.11.5; unit tests + a dedicated acceptance script
+  (`tests/acceptance/root-normal.sh`, separate from the 7-scenario suite).
 - WCKey removal (currently stop-managing only).
 - Non-accounting Slurm functionality (the reason the collection is named
   `pescobar.slurm`).

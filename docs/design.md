@@ -53,9 +53,11 @@ User - 'john':Partition='cpu':DefaultAccount='lab_physics':Fairshare=1
 | 11 | `WCKeys=`/`DefaultWCKey=` round-trip through dump/load (unlike the REST API, which cannot read `default_wc_key` back at all). | WCKeys are first-class, diffable inventory data. |
 | 12 | **Version difference — 25.11+: a `WCKeys=` on any User line silently aborts the entire `load ... clean` transaction** (exit 0, nothing created). On 25.05 the same line merely "flaps": each clean pass drops the user's WCKeys, and the file's value only re-applies when absent beforehand. | The clean pass renders **without** WCKey fields; a plain second pass applies them. Works on all three versions. |
 | 13 | `Coordinator='acct1,acct2'` on user lines round-trips and resets when omitted under clean. | Per-account `coordinators` lists are supported (the REST provider cannot manage them at all). |
+| 14 | The `root` account's account-level attributes (fairshare, GrpTRES/Max* limits, allowed/default QOS) are stored on the **Cluster line** in the dump — there is no `Account - 'root'` line. A `load ... clean` whose Cluster line carries those fields sets root's association, and clean **resets** root's fields to the Cluster line's values every run. | `root` is converged by rendering the desired fields onto the Cluster line (declared-keys-only overlay on the live line) and letting the existing clean-load apply them — no special-case `sacctmgr modify` needed. |
+| 15 | The built-in `normal` QOS is **absent from the dump at pristine default** (it only appears once it has a non-default field), but is always readable via `sacctmgr show qos normal`. `sacctmgr modify qos normal set …` persists, is untouched by `clean` (finding 4), and lowercases `Description` exactly like a load. | `normal` is converged in place with `sacctmgr modify` (never a load file — finding 7), and its live state is read via `show` (durations parsed back into the flat-file integer units), so a declared-value comparison is stable even at default. |
 
 No other behavioral differences were observed across 25.05.4 / 25.11.5 /
-26.05.1.
+26.05.1. Findings 14–15 verified on 25.05.4 and 25.11.5.
 
 ## The apply sequence
 
@@ -66,6 +68,7 @@ validate → dump + entity listings → plan
 2. plain-load a QOS-only file, if QOS changed               (findings 6, 7)
 3. `load ... clean` with a WCKey-less hierarchy file        (findings 8, 9, 12)
 4. plain `load` of the full file (applies WCKeys)           (findings 11, 12)
+4b. `sacctmgr modify qos normal set …` for declared system QOS (findings 7, 15)
 5. purge only: delete undeclared QOS, orphan users/accounts (findings 4, 5)
 6. re-dump, re-plan, fail on residual diff                  (finding 3)
 ```
@@ -73,8 +76,29 @@ validate → dump + entity listings → plan
 Additive mode's hierarchy file is the **live state with the inventory merged
 on top** (so `clean` deletes nothing); purge mode's is exactly the
 inventory. In both modes the Cluster line is re-rendered from the live dump
-(cluster-level defaults are not managed), and the fixed `root` lines are
-always present.
+with any inventory-declared `root` fields overlaid (finding 14 — that is how
+root's account-level attributes are managed; other cluster-level defaults are
+still left untouched), and the fixed `root` User line is always present.
+
+## Managing `root` and `normal` in place
+
+The two entities the collection never creates or deletes — the `root` account
+and the `normal` QOS — may still be **converged** when declared, via
+mechanisms that sidestep their special-casing:
+
+- **`root` account** — declare it in the `accounts` map with the override
+  fields only (`fairshare`, `default_qos`, `allowed_qos`, `max_jobs`, TRES
+  limits). These live on the Cluster line (finding 14), so they are applied by
+  the ordinary clean-load and round-trip through the dump. Declared-keys-only
+  in both modes: undeclared cluster-line fields are never fought over. No
+  parent/members/metadata are accepted for `root`, and it is never deleted.
+- **`normal` QOS** — declare it in the `qos` map like any QOS. It is applied
+  with `sacctmgr modify` (finding 15), never written to a load file (a
+  differing built-in QOS line silently aborts a load — finding 7), and never
+  deleted. Live state is read via `sacctmgr show qos`, converting the
+  `[D-]HH:MM:SS` durations back to the flat-file integer units. Declared-keys
+  only — omitted fields are left as-is (system-QOS fields never reset,
+  finding 10).
 
 ## Comparison / normalization rules
 

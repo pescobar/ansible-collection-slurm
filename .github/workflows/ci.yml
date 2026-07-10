@@ -103,6 +103,12 @@ jobs:
       - name: Run acceptance tests over SSH
         run: ./tests/acceptance/run-tests.sh
 
+      - name: Importer round-trip test
+        run: ./tests/acceptance/import-roundtrip.sh
+
+      - name: In-place root account + normal QOS test
+        run: ./tests/acceptance/root-normal.sh
+
       - name: Collect Docker logs on failure
         if: failure()
         run: |

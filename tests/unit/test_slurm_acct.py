@@ -5,11 +5,14 @@ import pytest
 
 from slurm_acct import (
     FAIRSHARE_PARENT_SENTINEL,
+    SYSTEM_QOS_SHOW_FORMAT,
     SlurmAcctError,
     canonical_text,
     compute_plan,
+    duration_to_seconds,
     merge_account_fragments,
     parse_flat,
+    parse_system_qos_show,
     projected_state,
     render,
     resolve,
@@ -140,21 +143,42 @@ def test_normal_qos_reference_is_allowed():
     assert state["accounts"]["acct"]["fields"]["DefaultQOS"] == "normal"
 
 
-def test_system_qos_declaration_refused():
-    with pytest.raises(SlurmAcctError) as exc:
-        resolve_sample(qos={"normal": {"priority": 1}})
-    assert any("built-in system QOS" in e for e in exc.value.errors)
+def test_system_qos_declared_in_place():
+    # `normal` is accepted and routed to system_qos (converged via modify),
+    # never into the load-file `qos` map, and no Description default is invented.
+    state = resolve_sample(qos={
+        "standard": {"priority": 100, "max_wall_pj": 1440},
+        "debug": {"priority": 250, "max_wall_pj": 30},
+        "normal": {"priority": 5, "max_wall_pj": 60},
+    })
+    assert "normal" not in state["qos"]
+    assert state["system_qos"]["normal"] == {
+        "Priority": "5", "MaxWallDurationPerJob": "60"}
 
 
-def test_root_account_and_user_refused():
+def test_root_account_declared_in_place():
+    state = resolve_sample(accounts={
+        "root": {"fairshare": 50, "allowed_qos": ["normal"], "max_jobs": 10},
+    }, admin_levels={}, default_accounts={}, wckeys={})
+    assert state["root"] == {"Fairshare": "50", "QOS": "normal", "MaxJobs": "10"}
+    assert "root" not in state["accounts"]
+
+
+def test_root_account_rejects_non_override_keys():
     with pytest.raises(SlurmAcctError) as exc:
         resolve_sample(accounts={
-            "root": {"user_associations": []},
-            "acct": {"user_associations": ["root"]},
+            "root": {"description": "the root", "user_associations": ["x"]},
         }, admin_levels={}, default_accounts={}, wckeys={})
     errors = " ".join(exc.value.errors)
-    assert "built-in root account" in errors
-    assert "'root' user cannot be listed" in errors
+    assert "root account" in errors and "only" in errors
+
+
+def test_root_user_still_refused_as_member():
+    with pytest.raises(SlurmAcctError) as exc:
+        resolve_sample(accounts={
+            "acct": {"user_associations": ["root"]},
+        }, admin_levels={}, default_accounts={}, wckeys={})
+    assert "'root' user cannot be listed" in " ".join(exc.value.errors)
 
 
 def test_duplicate_association_refused():
@@ -551,3 +575,96 @@ def test_merge_fragments_non_mapping_file_raises():
     with pytest.raises(SlurmAcctError) as exc:
         merge_account_fragments({}, [("bad.yml", ["not", "a", "map"])])
     assert "bad.yml" in "; ".join(exc.value.errors)
+
+
+# ---------------------------------------------------------------------------
+# root account + system QOS (converge-in-place)
+# ---------------------------------------------------------------------------
+
+
+def test_duration_to_seconds():
+    assert duration_to_seconds("") is None
+    assert duration_to_seconds("UNLIMITED") is None
+    assert duration_to_seconds("00:02:00") == 120
+    assert duration_to_seconds("00:30:00") == 1800
+    assert duration_to_seconds("1-00:00:00") == 86400
+    assert duration_to_seconds("7-00:00:00") == 604800
+    assert duration_to_seconds("120") == 120  # plain int passthrough
+
+
+def test_parse_system_qos_show_normalizes_durations_and_units():
+    cols = dict(zip(SYSTEM_QOS_SHOW_FORMAT,
+                    ["normal", "Normal QOS default", "10", "1-00:00:00",
+                     "00:02:00", "DenyOnLimit", "", "cpu=64"]))
+    fields = parse_system_qos_show(cols)
+    assert fields == {
+        "Description": "normal qos default",   # lowercased
+        "Priority": "10",
+        "MaxWallDurationPerJob": "1440",        # minutes
+        "GraceTime": "120",                     # seconds
+        "Flags": "DenyOnLimit",
+        "MaxTRESPerJob": "cpu=64",
+    }
+
+
+def test_parse_system_qos_show_omits_unset_and_zero_gracetime():
+    cols = dict(zip(SYSTEM_QOS_SHOW_FORMAT,
+                    ["normal", "normal qos default", "0", "", "00:00:00",
+                     "", "", ""]))
+    fields = parse_system_qos_show(cols)
+    # Priority is always emitted by show (0 is meaningful); the rest are unset.
+    assert fields == {"Description": "normal qos default", "Priority": "0"}
+
+
+def test_plan_root_declared_keys_only():
+    desired = resolve_sample(qos={}, accounts={
+        "root": {"fairshare": 50, "max_jobs": 10},
+    }, admin_levels={}, default_accounts={}, wckeys={})
+    # live cluster line has a different fairshare and an extra untouched field.
+    live = parse_flat("")
+    live_root = {"Fairshare": "1", "QOS": "normal", "GrpTRES": "cpu=99"}
+    plan = compute_plan(desired, live, purge=False, live_root=live_root,
+                        live_system_qos={})
+    assert plan["root"]["update"] == ["Fairshare", "MaxJobs"]
+    assert plan["needs_load"] and plan["changed"]
+
+    # in sync -> no change, no load
+    live_root2 = {"Fairshare": "50", "MaxJobs": "10", "GrpTRES": "cpu=99"}
+    plan2 = compute_plan(desired, live, purge=False, live_root=live_root2,
+                         live_system_qos={})
+    assert plan2["root"]["update"] == []
+    assert not plan2["needs_load"] and not plan2["changed"]
+
+
+def test_plan_system_qos_modify_declared_keys_only():
+    desired = resolve_sample(qos={
+        "normal": {"priority": 10, "max_wall_pj": 1440},
+    }, accounts={}, admin_levels={}, default_accounts={}, wckeys={})
+    live = parse_flat("")
+    # live normal differs in priority, matches wall -> only priority changes.
+    live_system_qos = {"normal": {"Priority": "0", "MaxWallDurationPerJob": "1440"}}
+    plan = compute_plan(desired, live, purge=False, live_root={},
+                        live_system_qos=live_system_qos)
+    assert plan["system_qos"] == {"normal": {"Priority": "10"}}
+    assert plan["changed"] and not plan["needs_load"]  # modify, not a load
+
+    # fully in sync -> nothing
+    live2 = {"normal": {"Priority": "10", "MaxWallDurationPerJob": "1440"}}
+    plan2 = compute_plan(desired, live, purge=False, live_root={},
+                         live_system_qos=live2)
+    assert plan2["system_qos"] == {}
+    assert not plan2["changed"]
+
+
+def test_render_excludes_root_and_system_qos():
+    # declared root/normal must never appear in the rendered load file.
+    state = resolve_sample(
+        qos={"standard": {"priority": 100, "max_wall_pj": 1440},
+             "debug": {"priority": 250, "max_wall_pj": 30},
+             "normal": {"priority": 7}},
+        accounts={"root": {"fairshare": 9},
+                  "dept": {"user_associations": ["alice"]}},
+        admin_levels={}, default_accounts={"alice": "dept"}, wckeys={})
+    text = render(state)
+    assert "'normal':" not in text.replace("QOS='normal'", "")  # only cluster QOS ref
+    assert "Account - 'root'" not in text
