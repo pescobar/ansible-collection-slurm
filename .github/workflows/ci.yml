@@ -25,7 +25,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install test requirements
-        run: pip install pytest
+        # pyyaml: the importer round-trip test imports tools/generate_inventory.py
+        run: pip install pytest pyyaml
 
       - name: Run renderer/parser/planner unit tests
         run: python -m pytest tests/unit/ -v
