@@ -15,6 +15,7 @@
 import argparse
 import os
 import sys
+from collections import Counter
 
 # Import the shared pure logic. parse_flat() already normalizes every record
 # (fairshare sentinel -> "parent", sorted lists, canonical keys), so the
@@ -88,6 +89,45 @@ def _split_assoc_fields(fields, context):
     return overrides, assoc
 
 
+def _hashable(value):
+    return tuple(value) if isinstance(value, list) else value
+
+
+def _hoist_defaults(members, submap, skip=None):
+    """Pull member fields shared across an account into an association_defaults
+    sub-map, so the common case collapses to bare usernames.
+
+    ``members`` is the list of materialized member records; ``submap`` is
+    ``"overrides"`` or ``"assoc"``. A field is hoisted only if it is present on
+    *every* member (otherwise a member that never had it would wrongly inherit
+    the default), taking its most common value and only when at least two
+    members share it (so the defaults block removes more lines than it adds).
+    The field is then dropped from every member whose value matches; members
+    that differ keep their own explicit value. ``partition`` is association
+    identity and never hoisted; ``skip(field, value)`` vetoes a specific hoist.
+    Mutates ``members`` and returns the defaults dict.
+    """
+    if len(members) < 2:
+        return {}
+    defaults = {}
+    common = set.intersection(*[set(m[submap]) for m in members]) - {"partition"}
+    for field in sorted(common):
+        pairs = [(_hashable(m[submap][field]), m[submap][field]) for m in members]
+        counts = Counter(key for key, _ in pairs)
+        top = max(counts.values())
+        if top < 2:
+            continue
+        winner_key = sorted((k for k, c in counts.items() if c == top), key=str)[0]
+        winner_val = next(val for key, val in pairs if key == winner_key)
+        if skip and skip(field, winner_val):
+            continue
+        defaults[field] = winner_val
+        for m in members:
+            if _hashable(m[submap][field]) == winner_key:
+                del m[submap][field]
+    return defaults
+
+
 def build_inventory(dump_text, known_users=None, known_accounts=None):
     """sacctmgr dump text -> dict of inventory data structures."""
     state = parse_flat(dump_text)
@@ -126,21 +166,50 @@ def build_inventory(dump_text, known_users=None, known_accounts=None):
         if rec["parent"] and rec["parent"] != "root":
             body["parent_account"] = rec["parent"]
 
-        members = []
+        # Materialize every member's fields first, then hoist values shared
+        # across members into association_defaults — otherwise the common case
+        # (e.g. every member at fairshare=parent) repeats a per-member override
+        # block on each line. Round-trip-safe: hoisted fields inherit back to
+        # exactly the value each member had (see _hoist_defaults).
         assocs = sorted((u, p, f) for (u, a, p), f in state["assocs"].items()
                         if a == name)
+        member_rows = []
         for user, part, fields in assocs:
-            fields = dict(fields)
-            if fields.get("Fairshare") == _DEFAULT_MEMBER_FAIRSHARE:
-                del fields["Fairshare"]
             overrides, assoc = _split_assoc_fields(
-                fields, "account %s member %s" % (name, user))
-            if part:
-                assoc["partition"] = part
+                dict(fields), "account %s member %s" % (name, user))
+            member_rows.append({"user": user, "partition": part,
+                                "overrides": overrides, "assoc": assoc})
+
+        default_over = _hoist_defaults(
+            member_rows, "overrides",
+            skip=lambda field, val: field == "fairshare"
+            and val == int(_DEFAULT_MEMBER_FAIRSHARE))
+        default_assoc = _hoist_defaults(member_rows, "assoc")
+
+        # A member fairshare of 1 that was NOT hoisted is resolve()'s own
+        # default; drop it so the member imports as a bare username.
+        if "fairshare" not in default_over:
+            for m in member_rows:
+                if m["overrides"].get("fairshare") == int(_DEFAULT_MEMBER_FAIRSHARE):
+                    del m["overrides"]["fairshare"]
+
+        defaults = {}
+        if default_over:
+            defaults["account_overrides"] = default_over
+        if default_assoc:
+            defaults["association"] = default_assoc
+        if defaults:
+            body["association_defaults"] = defaults
+
+        members = []
+        for m in member_rows:
+            overrides, assoc = m["overrides"], dict(m["assoc"])
+            if m["partition"]:
+                assoc["partition"] = m["partition"]
             if not overrides and not assoc:
-                members.append(user)
+                members.append(m["user"])
             else:
-                entry = {"user": user}
+                entry = {"user": m["user"]}
                 if overrides:
                     entry["account_overrides"] = overrides
                 if assoc:

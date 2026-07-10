@@ -115,3 +115,56 @@ def test_zero_association_entity_warned(capsys):
     build_inventory(DUMP, known_users=["ghost"], known_accounts=["empty_acct"])
     err = capsys.readouterr().err
     assert "ghost" in err and "empty_acct" in err
+
+
+# A dump where most members share fairshare=parent (the sentinel), with one
+# member (the TA) carrying its own fairshare + association-only fields.
+HOIST_DUMP = """\
+Cluster - 'linux':Fairshare=1:QOS='normal'
+Parent - 'root'
+User - 'root':DefaultAccount='root':AdminLevel='Administrator':Fairshare=1
+Account - 'teach':Description='teach':Organization='edu':Fairshare=50
+Parent - 'teach'
+User - 'stu1':DefaultAccount='teach':Fairshare=2147483647
+User - 'stu2':DefaultAccount='teach':Fairshare=2147483647
+User - 'stu3':DefaultAccount='teach':Fairshare=2147483647
+User - 'ta':DefaultAccount='teach':Fairshare=15:Priority=20
+"""
+
+
+def test_shared_member_field_hoisted_to_association_defaults():
+    inv = build_inventory(HOIST_DUMP)
+    teach = inv["accounts"]["teach"]
+    # the shared value lands in association_defaults...
+    assert teach["association_defaults"]["account_overrides"]["fairshare"] == "parent"
+    members = teach["user_associations"]
+    # ...students collapse to bare usernames...
+    assert {"stu1", "stu2", "stu3"} <= set(m for m in members if isinstance(m, str))
+    # ...and the odd-one-out keeps its explicit value + association fields.
+    ta = next(m for m in members if isinstance(m, dict) and m["user"] == "ta")
+    assert ta["account_overrides"]["fairshare"] == 15
+    assert ta["association"]["priority"] == 20
+
+
+def test_hoisted_import_round_trips():
+    plan, _ = _plan_from_import(HOIST_DUMP)
+    for section in ("qos", "accounts", "assocs", "users"):
+        assert plan[section]["create"] == [], (section, plan[section]["create"])
+        assert plan[section]["update"] == [], (section, plan[section]["update"])
+        assert plan[section]["delete"] == [], (section, plan[section]["delete"])
+
+
+def test_default_fairshare_not_hoisted():
+    # members all at the default fairshare=1 stay bare with no defaults block.
+    dump = (
+        "Cluster - 'linux':Fairshare=1:QOS='normal'\n"
+        "Parent - 'root'\n"
+        "User - 'root':DefaultAccount='root':AdminLevel='Administrator':Fairshare=1\n"
+        "Account - 'a':Description='a':Organization='o':Fairshare=10\n"
+        "Parent - 'a'\n"
+        "User - 'u1':DefaultAccount='a':Fairshare=1\n"
+        "User - 'u2':DefaultAccount='a':Fairshare=1\n"
+    )
+    inv = build_inventory(dump)
+    assert "association_defaults" not in inv["accounts"]["a"]
+    assert inv["accounts"]["a"]["user_associations"] == ["u1", "u2"]

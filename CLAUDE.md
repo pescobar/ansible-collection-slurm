@@ -183,13 +183,19 @@ SLURM_VERSION=25.05.4 docker compose -f tests/docker/docker-compose.yml up -d --
   one-file-per-account layout + `slurm_{cluster,qos,users}` group_vars:
   bare-string members when an assoc has no overrides, `default_accounts`
   only for multi-account users, skips/ warns on `normal` and zero-assoc
-  entities. Verified by a pure round-trip unit test
-  (`tests/unit/test_generate_inventory.py`: import → `resolve()` →
-  `compute_plan` vs `parse_flat(dump)` = no changes) and a live round-trip
-  acceptance test (`tests/acceptance/import-roundtrip.sh`).
-  Not yet done: hoisting unanimous member fields into `association_defaults`
-  (currently emits explicit per-member overrides — round-trips, just more
-  verbose) and per-account `coordinators` (warns; `Coordinator` is
+  entities. **Shared member fields are hoisted into `association_defaults`**
+  (`_hoist_defaults`): a field present on every member is pulled into the
+  defaults block at its most common value when ≥2 members share it, dropped
+  from the matching members (→ bare usernames) while the minority keep their
+  explicit value — round-trip-safe, and it reproduces the hand-authored
+  layout (e.g. `teaching`'s students collapse to bare names under a
+  `fairshare: parent` default). `partition` is never hoisted; a non-hoisted
+  fairshare of 1 is still dropped as resolve()'s default. Verified by pure
+  round-trip unit tests (`tests/unit/test_generate_inventory.py`: import →
+  `resolve()` → `compute_plan` vs `parse_flat(dump)` = no changes, incl. a
+  hoisting case) and a live round-trip acceptance test
+  (`tests/acceptance/import-roundtrip.sh`).
+  Not yet done: per-account `coordinators` (warns; `Coordinator` is
   user-global in the dump).
 - **Configure `root`/`normal` in place** (requested, not yet built): lift the
   declaration refusals in `resolve()` for the `root` account and `normal`
