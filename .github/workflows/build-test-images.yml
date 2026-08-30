@@ -22,7 +22,14 @@ jobs:
       matrix:
         # Keep in sync with acceptance-management.yml and build-images.sh.
         # 25.05 is the supported floor (QOS flat-file support starts there).
-        slurm_version: ["25.05.8", "25.11.6", "26.05.1"]
+        # sha256 is the tarball checksum from build-images.sh's TARBALL_SHA256 map.
+        include:
+          - slurm_version: "25.05.8"
+            sha256: "21ddc614396e7e0b1ba792841f182b4c5b24949b116cb509a3a650fc6fcc22b6"
+          - slurm_version: "25.11.6"
+            sha256: "6695aee51a36799917a4db4b1d787610af926b27b17c2e4246bf14c0fd029664"
+          - slurm_version: "26.05.1"
+            sha256: "c2de57f0b5cdcb5e50543706ab9cb812263a9366e5152c1e716aaf66d307e07c"
 
     steps:
       - uses: actions/checkout@v6
@@ -35,7 +42,11 @@ jobs:
         working-directory: tests/docker
         env:
           SLURM_VERSION: ${{ matrix.slurm_version }}
+          SLURM_TARBALL_SHA256: ${{ matrix.sha256 }}
         run: |
           tag="ghcr.io/pescobar/ansible-collection-slurm/slurm-test:${SLURM_VERSION}"
-          docker build --build-arg "SLURM_VERSION=${SLURM_VERSION}" -t "$tag" .
+          docker build \
+            --build-arg "SLURM_VERSION=${SLURM_VERSION}" \
+            --build-arg "SLURM_TARBALL_SHA256=${SLURM_TARBALL_SHA256}" \
+            -t "$tag" .
           docker push "$tag"

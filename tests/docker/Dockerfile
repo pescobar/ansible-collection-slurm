@@ -43,6 +43,7 @@ RUN git clone --branch ${GOSU_VERSION} --depth 1 \
 FROM ubuntu:24.04 AS builder
 
 ARG SLURM_VERSION
+ARG SLURM_TARBALL_SHA256
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -66,8 +67,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget --no-check-certificate -q -O /tmp/slurm-${SLURM_VERSION}.tar.bz2 \
+RUN wget -q -O /tmp/slurm-${SLURM_VERSION}.tar.bz2 \
       https://download.schedmd.com/slurm/slurm-${SLURM_VERSION}.tar.bz2 \
+    && echo "${SLURM_TARBALL_SHA256}  /tmp/slurm-${SLURM_VERSION}.tar.bz2" | sha256sum -c - \
     && tar xf /tmp/slurm-${SLURM_VERSION}.tar.bz2 -C /tmp \
     && cd /tmp/slurm-${SLURM_VERSION} \
     && ./configure \
@@ -123,9 +125,6 @@ RUN groupadd -r --gid=990 slurm \
     && useradd -r -g slurm --uid=990 slurm \
     && groupadd -r --gid=991 slurmrest \
     && useradd -r -g slurmrest --uid=991 slurmrest \
-    && dd if=/dev/urandom of=/etc/munge/munge.key bs=1 count=1024 \
-    && chmod 400 /etc/munge/munge.key \
-    && chown munge:munge /etc/munge/munge.key \
     && mkdir -m 0755 -p \
          /var/run/slurm \
          /var/spool/slurm \
