@@ -38,7 +38,7 @@ non-accounting Slurm functionality can live in the same collection.
 - Sample playbook + fully worked sample inventory under ``playbooks/``.
 - Self-contained docker test stack (``tests/docker/``), 7-scenario live
   acceptance suite (``tests/acceptance/``), pytest unit suite for the pure
-  engine logic (``tests/unit/``), and a CI matrix across Slurm 25.05.4,
-  25.11.5, and 26.05.1.
+  engine logic (``tests/unit/``), and a CI matrix across Slurm 25.05.8,
+  25.11.6, and 26.05.1.
 - Verified sacctmgr semantics and version differences documented in
   ``docs/design.md``.

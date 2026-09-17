@@ -190,8 +190,9 @@ Two things this collection manages that the REST API cannot:
 
 - WCKey removal is not implemented (stop-managing only); removing a key
   from Slurm requires manual `sacctmgr` surgery.
-- The Cluster line (cluster-level fairshare / default QOS list) and
-  `root`'s own attributes are not managed.
+- Cluster-level defaults on the Cluster line are not managed, except the
+  `root` account's attributes declared in the accounts data (see
+  *Protections*). The `root` user's `AdminLevel` is not managed.
 - Zero-association users cannot be declared — a user exists only through
   some account's `user_associations`.
 - Values containing `'` or `:` cannot be represented in the flat-file

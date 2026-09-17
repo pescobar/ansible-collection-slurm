@@ -47,8 +47,12 @@ record new findings in `docs/design.md`.
 
 Dev deps live in a project venv (`.venv/`, gitignored) —
 `python3 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt`
-(ansible-core, pytest, ansible-lint). `python` is not on PATH here; use
-`python3` / `.venv/bin/python`.
+(ansible-core, pytest, ansible-lint). If `python3 -m venv` fails with
+"ensurepip is not available" (no `python3-venv` package), use `uv` instead:
+`uv venv --seed .venv && .venv/bin/pip install -r tests/requirements.txt`
+(`--seed` puts pip in the venv). `python` is not on PATH here; use
+`python3` / `.venv/bin/python`. Activate the venv (`source
+.venv/bin/activate`) before `ansible-lint`, or it warns about an altered PATH.
 
 ```sh
 ./tests/docker/generate-ssh-key.sh
