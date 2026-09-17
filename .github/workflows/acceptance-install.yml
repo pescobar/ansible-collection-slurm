@@ -1,0 +1,56 @@
+name: Acceptance — Slurm install
+
+# End-to-end test for the slurm_install role: a complete single-node Slurm
+# deployment (munge, MariaDB + slurmdbd, slurmctld, slurmd) directly on the
+# GitHub-hosted runner VM — a real systemd machine, so the actual package
+# install and unit start paths are exercised — followed by resource-limit
+# checks and the slurm_acct role against the freshly installed cluster.
+# See tests/install/run-tests.sh for the asserted scenarios.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  install:
+    name: Install on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu 26.04 is the first LTS whose archive Slurm (25.11) meets the
+        # collection's 25.05 floor.
+        os: [ubuntu-26.04]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # The runner image ships MySQL (service disabled); its packages and
+      # data dir conflict with the mariadb-server the role installs.
+      - name: Remove the preinstalled MySQL
+        run: |
+          sudo apt-get purge -y 'mysql-*'
+          sudo rm -rf /etc/mysql /var/lib/mysql
+
+      - name: Show versions
+        run: |
+          ansible --version
+          hostname -s
+          nproc
+          free -m
+
+      - name: Run the install acceptance tests
+        run: ./tests/install/run-tests.sh
+
+      - name: Collect Slurm logs on failure
+        if: failure()
+        run: |
+          for f in /etc/slurm/slurm.conf /var/log/slurm/*.log; do
+            echo "=== $f ==="
+            sudo tail -n 80 "$f" || true
+          done
+          sudo journalctl -u munge -u mariadb -u slurmdbd -u slurmctld -u slurmd --no-pager -n 100 || true

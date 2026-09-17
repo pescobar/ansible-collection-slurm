@@ -251,6 +251,7 @@ Options (see `roles/slurm_install/defaults/main.yml` for all variables):
 |---|---|
 | `slurm_install_manage_etc_hosts` | add every cluster host to `/etc/hosts` |
 | `slurm_install_slurm_conf_template` (and `_cgroup_conf_`, `_slurmdbd_conf_`) | use your own template |
+| `slurm_install_slurm_conf_extra` | extra lines appended to the built-in `slurm.conf` (e.g. `GresTypes=gpu`) |
 | `slurm_install_config_git_repo` | take `/etc/slurm` from a git repo instead (all files except `slurmdbd.conf`, which always comes from the template because it holds the DB password) |
 | `slurm_install_job_submit_lua_template` | deploy `job_submit.lua` and enable the Lua plugin; the role ships `job_submit_autoadd.lua.j2`, which adds unknown users to accounting on their first job (don't combine it with `slurm_acct_purge`) |
 | `slurm_install_systemd_overrides` | systemd drop-ins per unit, e.g. `{slurmd: "[Service]\nLimitNOFILE=262144\n"}` |
@@ -292,10 +293,17 @@ CI is split by concern:
   guard, and the `fairshare=parent` round-trip; plus the importer round-trip
   (`import-roundtrip.sh`) and the in-place `root`/`normal` test
   (`root-normal.sh`).
+- **`acceptance-install.yml`** — a complete `slurm_install` deployment on an
+  `ubuntu-26.04` runner VM (`tests/install/run-tests.sh`), asserting: install,
+  a zero-change second run, the node comes up idle and runs jobs, a 1-CPU
+  task is confined to one core, memory limits are enforced (a job over `--mem` ends `OUT_OF_MEMORY`), then
+  `slurm_acct` loads the sample data (and is a `--check` no-op), a user with
+  an association can submit and one without is rejected.
 - **`build-test-images.yml`** — builds and pushes the test images to GHCR
   (manual trigger).
 
-A future acceptance workflow will cover the planned Slurm **install** role.
+`tests/install/run-tests.sh` installs Slurm **on the machine it runs on** —
+use a throwaway VM or a privileged systemd container (see `CLAUDE.md`).
 
 ## Importing from an existing cluster
 

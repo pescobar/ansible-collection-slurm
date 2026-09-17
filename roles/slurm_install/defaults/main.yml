@@ -67,6 +67,11 @@ slurm_install_partition_name: compute
 # Memory (MB) kept out of each node's RealMemory for the OS.
 slurm_install_node_memory_reserve_mb: 0
 slurm_install_mpi_default: pmix
+# Extra lines appended to the built-in slurm.conf, e.g.
+#   slurm_install_slurm_conf_extra: |
+#     GresTypes=gpu
+#     AccountingStorageTRES=gres/gpu
+slurm_install_slurm_conf_extra: ""
 
 # Deploy cgroup.conf to workers (needed for the task/cgroup memory and core
 # limits to be enforced).

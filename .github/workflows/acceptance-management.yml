@@ -4,8 +4,8 @@ name: Acceptance — accounts/users/QOS management
 # associations and QOS against a live Slurm control plane over SSH, across every
 # supported Slurm version. The cluster comes from the pre-built, self-contained
 # images published by the "Build test-cluster images" workflow — this job only
-# PULLS them (no per-run source compile). A future install-role acceptance
-# workflow will live alongside this one.
+# PULLS them (no per-run source compile). The slurm_install role has its own
+# workflow, acceptance-install.yml.
 
 on:
   push:

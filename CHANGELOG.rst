@@ -39,8 +39,11 @@ non-accounting Slurm functionality can live in the same collection.
   a static Slurm 25.11 cluster from the Ubuntu 26.04 archive — munge key
   distribution, MariaDB + slurmdbd, slurmctld, slurmd with ``cgroup.conf``
   memory/core limits, submit hosts — with optional ``/etc/hosts`` management,
-  custom templates, config from a git repo, a ``job_submit.lua`` plugin (an
-  auto-add-users script is included), and systemd drop-ins. Adds a dependency
+  custom templates, extra ``slurm.conf`` lines, config from a git repo, a
+  ``job_submit.lua`` plugin (an auto-add-users script is included), and
+  systemd drop-ins. Tested by a full deployment on an Ubuntu 26.04 runner VM
+  (``acceptance-install.yml``: idempotency, core/memory limits, accounting
+  enforcement with ``slurm_acct``). Adds a dependency
   on ``ansible.mariadb`` and raises the minimum ansible-core to 2.16.
 - Sample playbook + fully worked sample inventory under ``playbooks/``.
 - Self-contained docker test stack (``tests/docker/``), 7-scenario live

@@ -69,3 +69,8 @@ NodeName={{ node }} Sockets={{ facts['processor_count'] }} CoresPerSocket={{ fac
 {% if groups[slurm_install_workers_group] | default([]) | length > 0 %}
 PartitionName={{ slurm_install_partition_name }} Nodes={{ groups[slurm_install_workers_group] | join(',') }} Default=YES MaxTime=INFINITE State=UP
 {% endif %}
+{% if slurm_install_slurm_conf_extra | length > 0 %}
+
+# Extra settings (slurm_install_slurm_conf_extra)
+{{ slurm_install_slurm_conf_extra }}
+{% endif %}
