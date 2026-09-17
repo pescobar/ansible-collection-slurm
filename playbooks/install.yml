@@ -1,0 +1,18 @@
+---
+# Install and configure a Slurm cluster (Ubuntu 26.04, static config).
+#
+# Inventory groups: slurm_controller (exactly one host: slurmctld, and
+# slurmdbd unless slurm_install_dbd_host says otherwise), slurm_workers
+# (slurmd), slurm_submit (client commands only). See the role defaults.
+#
+#   ansible-playbook -i inventory/hosts.yml install.yml
+#
+# Then load the accounting data with site.yml (slurm_acct_cluster must equal
+# slurm_install_cluster_name).
+
+- name: Install and configure Slurm
+  hosts: slurm_controller:slurm_workers:slurm_submit
+  become: true
+  gather_facts: true
+  roles:
+    - pescobar.slurm.slurm_install

@@ -1,0 +1,14 @@
+---
+# slurmctld registers its cluster in slurmdbd on start (Slurm >= 20.02), so
+# slurmdbd must be up first.
+- name: Wait for slurmdbd
+  ansible.builtin.wait_for:
+    host: "{{ slurm_install_dbd_host }}"
+    port: 6819
+    timeout: 120
+
+- name: Start slurmctld
+  ansible.builtin.systemd_service:
+    name: slurmctld
+    state: started
+    enabled: true

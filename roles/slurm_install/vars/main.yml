@@ -1,0 +1,9 @@
+---
+_slurm_install_units: >-
+  {{ ['munge']
+     + (['slurmctld'] if _slurm_install_is_controller else [])
+     + (['slurmdbd'] if _slurm_install_is_dbd else [])
+     + (['slurmd'] if _slurm_install_is_worker else []) }}
+_slurm_install_overrides: >-
+  {{ slurm_install_systemd_overrides | dict2items
+     | selectattr('key', 'in', _slurm_install_units) | list }}

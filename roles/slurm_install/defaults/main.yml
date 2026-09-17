@@ -1,0 +1,99 @@
+---
+# Install and configure a Slurm cluster (static config) from the Ubuntu
+# 26.04 archive packages (Slurm 25.11). Run it against every cluster host in
+# one play with facts gathered: slurm.conf and /etc/hosts are rendered from
+# the facts of all cluster hosts.
+
+# ClusterName in slurm.conf (lowercase). slurm_acct_cluster must match it.
+slurm_install_cluster_name: cluster
+
+# Inventory groups selecting what each host runs. The controller group must
+# hold exactly one host (slurmctld); workers run slurmd; submit hosts only
+# get the client commands and slurm.conf. A group that does not exist is
+# treated as empty.
+slurm_install_controller_group: slurm_controller
+slurm_install_workers_group: slurm_workers
+slurm_install_submit_group: slurm_submit
+
+# slurmctld host (SlurmctldHost) and slurmdbd host (AccountingStorageHost).
+# Both must be inventory hostnames that equal the machines' short hostnames.
+slurm_install_controller_host: "{{ groups[slurm_install_controller_group] | first }}"
+slurm_install_dbd_host: "{{ slurm_install_controller_host }}"
+
+# Add every cluster host to /etc/hosts (IP from each host's default_ipv4
+# fact). Leave off when DNS already resolves the cluster hostnames.
+slurm_install_manage_etc_hosts: false
+
+# Packages per host type (Ubuntu archive names).
+slurm_install_packages_common:
+  - slurm-client
+  - munge
+slurm_install_packages_controller:
+  - slurmctld
+slurm_install_packages_dbd:
+  - slurmdbd
+  - mariadb-server
+  - python3-pymysql  # ansible.mariadb modules
+slurm_install_packages_worker:
+  - slurmd
+
+# slurmdbd's MariaDB database. The password has no default: set it (vaulted)
+# for the dbd host.
+slurm_install_dbd_storage_db: slurm_acct_db
+slurm_install_dbd_storage_user: slurm
+# slurm_install_dbd_storage_password:
+
+# Extra MariaDB server settings, written to
+# /etc/mysql/mariadb.conf.d/99-slurmdbd.cnf. SchedMD recommends a buffer pool
+# of at least 4 GiB and 5-50% of RAM, and a log file of 25% of the pool
+# (slurmdbd logs a warning below 4 GiB).
+slurm_install_mariadb_buffer_pool_mb: "{{ [4096, (ansible_facts['memtotal_mb'] * 0.5) | int] | min }}"
+slurm_install_mariadb_config: |
+  [mysqld]
+  innodb_buffer_pool_size={{ slurm_install_mariadb_buffer_pool_mb }}M
+  innodb_log_file_size={{ (slurm_install_mariadb_buffer_pool_mb | int / 4) | int }}M
+  innodb_lock_wait_timeout=900
+  max_allowed_packet=16M
+
+# Config templates. Point any of them at your own template (a path relative
+# to the playbook's templates/ dir, or absolute) to replace the built-in one.
+slurm_install_slurm_conf_template: slurm.conf.j2
+slurm_install_slurmdbd_conf_template: slurmdbd.conf.j2
+slurm_install_cgroup_conf_template: cgroup.conf.j2
+
+# Settings used by the built-in slurm.conf.j2. Nodes are generated from each
+# worker's facts (sockets, cores, threads, memory) into one partition.
+slurm_install_partition_name: compute
+# Memory (MB) kept out of each node's RealMemory for the OS.
+slurm_install_node_memory_reserve_mb: 0
+slurm_install_mpi_default: pmix
+
+# Deploy cgroup.conf to workers (needed for the task/cgroup memory and core
+# limits to be enforced).
+slurm_install_deploy_cgroup_conf: true
+
+# Take slurm.conf, cgroup.conf, job_submit.lua and any other file from a git
+# repo instead of the templates above. The repo is checked out on every
+# cluster host and its files are copied over /etc/slurm (the .git dir and
+# slurmdbd.conf excluded: slurmdbd.conf holds the DB password and is always
+# rendered from the template).
+slurm_install_config_git_repo: ""
+slurm_install_config_git_version: main
+slurm_install_config_git_checkout: /var/lib/slurm-config-git
+
+# job_submit.lua on the controller (enables JobSubmitPlugins=lua in the
+# built-in slurm.conf). Empty disables it. The role ships
+# job_submit_autoadd.lua.j2, which adds unknown users to accounting on their
+# first job with the default account below. Do not combine it with
+# slurm_acct_purge: purge deletes those users again.
+slurm_install_job_submit_lua_template: ""
+slurm_install_job_submit_autoadd_account: root
+
+# systemd drop-ins, keyed by unit (slurmctld, slurmd, slurmdbd, munge),
+# written to /etc/systemd/system/<unit>.service.d/override.conf on the hosts
+# running that unit. Example:
+#   slurm_install_systemd_overrides:
+#     slurmd: |
+#       [Service]
+#       LimitNOFILE=262144
+slurm_install_systemd_overrides: {}

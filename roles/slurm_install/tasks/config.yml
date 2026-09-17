@@ -1,0 +1,63 @@
+---
+- name: Deploy slurm.conf
+  ansible.builtin.template:
+    src: "{{ slurm_install_slurm_conf_template }}"
+    dest: /etc/slurm/slurm.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: _slurm_install_templated
+  notify: Slurm config changed
+
+- name: Deploy cgroup.conf
+  ansible.builtin.template:
+    src: "{{ slurm_install_cgroup_conf_template }}"
+    dest: /etc/slurm/cgroup.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - _slurm_install_templated
+    - _slurm_install_is_worker
+    - slurm_install_deploy_cgroup_conf | bool
+  notify: Restart slurmd
+
+- name: Deploy job_submit.lua
+  ansible.builtin.template:
+    src: "{{ slurm_install_job_submit_lua_template }}"
+    dest: /etc/slurm/job_submit.lua
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - _slurm_install_templated
+    - _slurm_install_is_controller
+    - slurm_install_job_submit_lua_template | length > 0
+  notify: Restart slurmctld
+
+# /etc/slurm is not empty after the package install (plugstack.conf), so
+# the repo cannot be cloned into it: check it out aside and copy it over.
+- name: Deploy the Slurm config from git
+  when: not _slurm_install_templated
+  block:
+    - name: Check out the Slurm config repo
+      ansible.builtin.git:
+        repo: "{{ slurm_install_config_git_repo }}"
+        version: "{{ slurm_install_config_git_version }}"
+        dest: "{{ slurm_install_config_git_checkout }}"
+        force: true
+
+    - name: Copy the Slurm config repo into /etc/slurm
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - --recursive
+          - --checksum
+          - --itemize-changes
+          - --exclude=.git
+          - --exclude=slurmdbd.conf
+          - "{{ slurm_install_config_git_checkout }}/"
+          - /etc/slurm/
+      register: _slurm_install_rsync
+      changed_when: _slurm_install_rsync.stdout | length > 0
+      notify: Slurm config changed

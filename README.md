@@ -2,7 +2,9 @@
 
 An Ansible collection for managing Slurm. The collection is deliberately
 scoped as `pescobar.slurm` (not `slurm_acct`) so future non-accounting
-functionality can live here too; today it provides **declarative Slurm
+functionality can live here too. It provides a role that **installs and
+configures a Slurm cluster** (Ubuntu 26.04, see
+[Installing a cluster](#installing-a-cluster-slurm_install)) and **declarative Slurm
 accounting** — accounts, users, associations, QOS — built on Slurm's own
 declarative mechanism: the desired state is rendered into `sacctmgr`'s
 flat-file format and converged with `sacctmgr -i load`, running **on the
@@ -35,7 +37,9 @@ two by copying YAML values.
 |---|---|
 | `pescobar.slurm.slurm_acct` (module) | converge Slurm accounting state; full check/diff support |
 | `pescobar.slurm.slurm_acct` (role) | thin wrapper mapping `slurm_acct_*` inventory vars onto the module |
-| `playbooks/site.yml` + `playbooks/inventory/` | ready-to-run playbook and a fully worked sample inventory |
+| `pescobar.slurm.slurm_install` (role) | install and configure munge, slurmdbd (MariaDB), slurmctld, slurmd and submit hosts from the Ubuntu 26.04 packages |
+| `playbooks/install.yml` | runs `slurm_install` on the `slurm_controller`, `slurm_workers` and `slurm_submit` groups |
+| `playbooks/site.yml` + `playbooks/inventory/` | ready-to-run accounting playbook and a fully worked sample inventory |
 
 ## Quick start
 
@@ -190,12 +194,69 @@ Two things this collection manages that the REST API cannot:
 
 - WCKey removal is not implemented (stop-managing only); removing a key
   from Slurm requires manual `sacctmgr` surgery.
-- The Cluster line (cluster-level fairshare / default QOS list) and
-  `root`'s own attributes are not managed.
+- Cluster-level defaults on the Cluster line are not managed, except the
+  `root` account's attributes declared in the accounts data (see
+  *Protections*). The `root` user's `AdminLevel` is not managed.
 - Zero-association users cannot be declared — a user exists only through
   some account's `user_associations`.
 - Values containing `'` or `:` cannot be represented in the flat-file
   format and are refused at validation time.
+
+## Installing a cluster (`slurm_install`)
+
+The `slurm_install` role installs Slurm 25.11 from the **Ubuntu 26.04**
+archive (the first Ubuntu LTS whose Slurm meets the accounting floor above)
+and writes a **static** config: every host gets the same `slurm.conf`.
+Configless mode, building packages from source and custom apt repositories
+are planned (see Roadmap).
+
+```yaml
+# inventory/hosts.yml
+slurm_controller:        # exactly one host: slurmctld (+ slurmdbd and MariaDB)
+  hosts:
+    slurm-master:
+slurm_workers:           # slurmd
+  hosts:
+    slurm-worker-01:
+    slurm-worker-02:
+slurm_submit:            # client commands only
+  hosts:
+    login-node:
+all:
+  vars:
+    slurm_install_cluster_name: linux
+    slurm_install_dbd_storage_password: "{{ vault_slurmdbd_password }}"
+```
+
+```sh
+ansible-playbook -i inventory/hosts.yml install.yml   # install + configure
+ansible-playbook -i inventory/hosts.yml site.yml      # then load accounting
+```
+
+Inventory hostnames must be the machines' short hostnames, and the play must
+gather facts on all cluster hosts (nodes are defined from each worker's
+sockets, cores, threads and memory). What the role does:
+
+- installs the packages per host type and copies the controller's munge key
+  to every host;
+- sets up MariaDB (settings sized from the host's RAM), the slurmdbd
+  database and user, and slurmdbd; slurmctld registers the cluster itself;
+- deploys `slurm.conf` (cons_tres, cgroup v2 task/proctrack plugins,
+  accounting enforcement, one partition with all workers) and `cgroup.conf`
+  (memory and core limits) to the workers.
+
+Options (see `roles/slurm_install/defaults/main.yml` for all variables):
+
+| Variable | Effect |
+|---|---|
+| `slurm_install_manage_etc_hosts` | add every cluster host to `/etc/hosts` |
+| `slurm_install_slurm_conf_template` (and `_cgroup_conf_`, `_slurmdbd_conf_`) | use your own template |
+| `slurm_install_config_git_repo` | take `/etc/slurm` from a git repo instead (all files except `slurmdbd.conf`, which always comes from the template because it holds the DB password) |
+| `slurm_install_job_submit_lua_template` | deploy `job_submit.lua` and enable the Lua plugin; the role ships `job_submit_autoadd.lua.j2`, which adds unknown users to accounting on their first job (don't combine it with `slurm_acct_purge`) |
+| `slurm_install_systemd_overrides` | systemd drop-ins per unit, e.g. `{slurmd: "[Service]\nLimitNOFILE=262144\n"}` |
+
+The role depends on the `ansible.mariadb` collection (installed
+automatically with this collection).
 
 ## Development / testing
 
@@ -272,4 +333,7 @@ ansible-playbook -i imported_inventory/hosts.yml site.yml --check --diff
 
 ## Roadmap
 
-- Non-accounting Slurm functionality (hence the collection name).
+- `slurm_install`: CI deployment test on an Ubuntu 26.04 runner VM,
+  configless mode (`sackd` on login nodes), OpenStack elastic scheduling, a
+  script to build compute-node images, building Slurm `.deb` packages from
+  source, and custom apt repositories.

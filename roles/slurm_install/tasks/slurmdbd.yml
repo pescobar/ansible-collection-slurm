@@ -1,0 +1,48 @@
+---
+- name: Deploy the MariaDB settings for slurmdbd
+  ansible.builtin.copy:
+    content: "{{ slurm_install_mariadb_config }}"
+    dest: /etc/mysql/mariadb.conf.d/99-slurmdbd.cnf
+    owner: root
+    group: root
+    mode: "0644"
+  register: _slurm_install_mariadb_cnf
+
+# Restarts in this file happen right away (not in handlers): slurmdbd needs
+# the final MariaDB, and slurmctld the final slurmdbd.
+- name: Start MariaDB (restart if its settings changed)
+  ansible.builtin.systemd_service:
+    name: mariadb
+    state: "{{ 'restarted' if _slurm_install_mariadb_cnf is changed else 'started' }}"
+    enabled: true
+
+- name: Create the slurmdbd database
+  ansible.mariadb.mariadb_db:
+    name: "{{ slurm_install_dbd_storage_db }}"
+    state: present
+    login_unix_socket: /run/mysqld/mysqld.sock
+
+- name: Create the slurmdbd database user
+  ansible.mariadb.mariadb_user:
+    name: "{{ slurm_install_dbd_storage_user }}"
+    host: localhost
+    password: "{{ slurm_install_dbd_storage_password }}"
+    priv: "{{ slurm_install_dbd_storage_db }}.*:ALL"
+    state: present
+    login_unix_socket: /run/mysqld/mysqld.sock
+  no_log: true
+
+- name: Deploy slurmdbd.conf
+  ansible.builtin.template:
+    src: "{{ slurm_install_slurmdbd_conf_template }}"
+    dest: /etc/slurm/slurmdbd.conf
+    owner: slurm
+    group: slurm
+    mode: "0600"
+  register: _slurm_install_slurmdbd_conf
+
+- name: Start slurmdbd (restart if its settings changed)
+  ansible.builtin.systemd_service:
+    name: slurmdbd
+    state: "{{ 'restarted' if _slurm_install_slurmdbd_conf is changed else 'started' }}"
+    enabled: true

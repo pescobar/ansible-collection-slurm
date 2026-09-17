@@ -1,6 +1,6 @@
 .ansible/
-.venv/
-venv/
+.venv*/
+venv*/
 tests/docker/.ssh/
 tests/output/
 *.tar.gz

@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+# See cgroup.conf(5). Ubuntu 26.04 is cgroup v2 only.
+
+CgroupPlugin=autodetect
+ConstrainCores=yes
+ConstrainRAMSpace=yes
+ConstrainSwapSpace=yes
+# No swap on top of the requested memory.
+AllowedSwapSpace=0
