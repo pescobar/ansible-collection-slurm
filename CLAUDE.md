@@ -12,8 +12,11 @@ format, converge with `sacctmgr -i load` **on the slurmctld host over SSH**.
 No slurmrestd, no JWT.
 
 The collection is named `pescobar.slurm` (not `slurm_acct`) on purpose:
-future non-accounting Slurm functionality belongs here too. The accounting
-module/role keep the `slurm_acct` name.
+non-accounting Slurm functionality belongs here too. The accounting
+module/role keep the `slurm_acct` name; the `slurm_install` role installs
+and configures the cluster itself (see its section below). It replaces the
+older `scicore.slurm` role (github.com/scicore-unibas-ch/ansible-role-slurm),
+which is NOT modified — all new work happens in this collection.
 
 **Every behavioral claim in this repo was verified against live clusters**
 (25.05.8 / 25.11.6 / 26.05.1) — keep that discipline: when touching engine
@@ -79,6 +82,7 @@ SLURM_VERSION=25.05.8 docker compose -f tests/docker/docker-compose.yml up -d --
   unmanaged-entities report. Also assembles sharded accounts (see below).
 - `playbooks/` — `site.yml` (converge) + `import.yml` (aux: generate
   inventory from a running cluster) + sample inventory (fully worked data).
+- `roles/slurm_install/` — installs/configures the cluster (see below).
 - `tools/generate_inventory.py` — the importer: `sacctmgr dump` → inventory,
   reusing `parse_flat()`. Reverses the field-name maps; round-trip-tested.
 
@@ -150,6 +154,56 @@ SLURM_VERSION=25.05.8 docker compose -f tests/docker/docker-compose.yml up -d --
   onto it (declared-keys-only) and applied by the clean-load — that is how
   root's account-level attributes are managed (finding 14). Undeclared
   cluster-level defaults are still never fought over.
+
+## slurm_install role
+
+Ubuntu 26.04 only (archive Slurm 25.11.2 — Ubuntu 24.04 ships 23.11, below
+the 25.05 floor), static config, munge auth. Facts verified by installing
+the packages in `ubuntu:26.04`, and the role verified end-to-end in
+privileged systemd containers (single node over `connection: local`, and a
+controller + 2 workers + login node over `community.docker.docker`): fresh
+install, zero-change second run, `--check --diff` clean, 2-node `srun`,
+`--mem=100M` job allocating 600 MB ends `OUT_OF_MEMORY`, git-config mode,
+Lua auto-add plugin, systemd drop-ins.
+
+- Packages create the `slurm` user (uid/gid 64030), `/var/lib/slurm/{slurmctld,slurmd}`
+  and `/var/log/slurm`; units are `Type=notify` (slurmctld, slurmd) /
+  `Type=simple` (slurmdbd) with RuntimeDirectory `/run/slurmctld`,
+  `/run/slurm`, `/run/slurmdbd` — the pid paths in `slurm.conf.j2` match.
+  slurmctld runs as `User=slurm`. The slurmd unit already has
+  `ConditionPathExists` commented out (configless-ready). `sackd` is packaged.
+- The munge package generates a **different key per host**; the role copies
+  the controller's. The key is binary: compared by checksum, written via
+  `base64 -d` (`copy content=` is text-only).
+- `/etc/slurm` is **not empty** after install (`plugstack.conf`), so git
+  mode checks the repo out to `slurm_install_config_git_checkout` and
+  rsyncs it over, excluding `.git` and `slurmdbd.conf` (always templated:
+  holds the DB password; slurmdbd needs it 0600).
+- slurmctld registers its cluster in slurmdbd on start (Slurm >= 20.02) —
+  no `sacctmgr add cluster` task; the role only waits for port 6819.
+- Restart ordering: munge, MariaDB and slurmdbd restart **inline** (state
+  `restarted` when their config changed) because later tasks need them;
+  slurmctld/slurmd restart in end-of-play handlers (`Slurm config changed`).
+  Do not use `flush_handlers` — it would restart slurmctld/slurmd before
+  slurmdbd exists on a fresh install.
+- MariaDB modules: `ansible.mariadb` (the `community.mysql` modules are now
+  redirects to `ansible.mysql`, which warns it drops MariaDB in 6.0.0).
+  slurmdbd logs "not recommended values: innodb_buffer_pool_size" below
+  4 GiB (SchedMD: >= 4 GiB and 5-50% of RAM) — the default is
+  min(4096, 50% RAM) MB.
+- Node lines come from each worker's facts (`processor_count`,
+  `processor_cores`, `processor_threads_per_core`, `memtotal_mb`); they
+  matched `slurmd -C` exactly in the containers.
+  `slurm_install_node_memory_reserve_mb` is the knob if a VM reports less.
+- The default `slurm.conf` sets no `MailProg`, so slurmctld logs
+  "Configured MailProg is invalid" (no `/usr/bin/mail`) — harmless.
+- In ansible-lint's template check, `inventory_hostname in <list>` fails;
+  use `<group> in group_names`.
+
+Local test recipe (no CI needed): build an image `FROM ubuntu:26.04` with
+`systemd systemd-sysv python3 ansible-core sudo`, `CMD /sbin/init`, run it
+`--privileged --cgroupns=private`, mount the installed collections, and run
+`playbooks/install.yml` inside with `ansible_connection: local`.
 
 ## Bugs found and fixed (all verified on live clusters)
 
@@ -232,15 +286,25 @@ SLURM_VERSION=25.05.8 docker compose -f tests/docker/docker-compose.yml up -d --
   25.11.5; unit tests + a dedicated acceptance script
   (`tests/acceptance/root-normal.sh`, separate from the 7-scenario suite).
 - WCKey removal (currently stop-managing only).
-- **Slurm install role** (planned — the reason the collection is named
-  `pescobar.slurm`, not `slurm_acct`). CI decision already made: it gets its
+- **Slurm install role** — phase 1 DONE (`slurm_install`: Ubuntu 26.04,
+  archive packages, static config, see its section). Next, in order: CI
+  deployment test (below), then the scicore-courses-cloud repo deploys its
+  OpenStack course cluster with it (static config), then configless mode
+  (`sackd` on login nodes), OpenStack elastic scheduling (resume/suspend
+  scripts, `clouds.yaml`), an aux script to build compute-node images,
+  building `.deb`s from source, custom apt repos. Features of the old role
+  intentionally dropped: RedHat/EPEL/OpenHPC, creating the slurm user (the
+  package does it), `GIT_SSL_NO_VERIFY`.
+  CI decision already made: it gets its
   own workflow `acceptance-install.yml`, kept separate from
   `acceptance-management.yml` (the accounts/users/QOS suite). Use **tier 1 —
   run the role directly on the GitHub-hosted runner VM** (`hosts: localhost`,
   `connection: local`): the runner is a real ephemeral VM with systemd and a
   real package manager, so it exercises the actual install path (packages +
   systemd unit start) far more faithfully than a container — matrix over the
-  OS runner images (`ubuntu-22.04`, `ubuntu-24.04`). Only reach for tier 2
+  OS runner images (now just `ubuntu-26.04`). The CI must also verify
+  resource limits (a job exceeding `--mem` ends `OUT_OF_MEMORY`) and run
+  `slurm_acct` against the installed cluster. Only reach for tier 2
   (Vagrant + libvirt/KVM real VMs; `/dev/kvm` is available on Linux runners)
   if distros the runner images don't provide (RHEL/Rocky/…) or multi-node must
   be covered. NOT a container job — the management suite uses containers only

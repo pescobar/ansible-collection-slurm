@@ -1,0 +1,71 @@
+# {{ ansible_managed }}
+# Static slurm.conf for Slurm 25.11 (Ubuntu 26.04 packages). Identical on
+# every cluster host. See slurm.conf(5).
+
+ClusterName={{ slurm_install_cluster_name }}
+SlurmctldHost={{ slurm_install_controller_host }}
+AuthType=auth/munge
+SlurmUser=slurm
+
+# Daemons (paths match the Ubuntu packages' systemd units and directories)
+SlurmctldPort=6817
+SlurmdPort=6818
+StateSaveLocation=/var/lib/slurm/slurmctld
+SlurmdSpoolDir=/var/lib/slurm/slurmd
+SlurmctldPidFile=/run/slurmctld/slurmctld.pid
+SlurmdPidFile=/run/slurm/slurmd.pid
+SlurmctldLogFile=/var/log/slurm/slurmctld.log
+SlurmdLogFile=/var/log/slurm/slurmd.log
+SlurmctldDebug=info
+SlurmdDebug=info
+SlurmctldTimeout=300
+SlurmdTimeout=300
+ReturnToService=1
+
+# Scheduling
+SchedulerType=sched/backfill
+SelectType=select/cons_tres
+SelectTypeParameters=CR_Core_Memory
+DefMemPerCPU=1000
+MaxJobCount=1000000
+MaxArraySize=150000
+JobRequeue=0
+PriorityType=priority/multifactor
+PriorityFlags=FAIR_TREE
+PriorityDecayHalfLife=14-0
+PriorityMaxAge=7-0
+PriorityWeightAge=100
+PriorityWeightFairshare=10000
+PriorityWeightJobSize=500
+PriorityWeightPartition=10000
+PriorityWeightQOS=2000
+{% if slurm_install_job_submit_lua_template | length > 0 %}
+JobSubmitPlugins=lua
+{% endif %}
+
+# Job execution and resource limits (cgroup v2, see cgroup.conf)
+ProctrackType=proctrack/cgroup
+TaskPlugin=task/affinity,task/cgroup
+JobAcctGatherType=jobacct_gather/cgroup
+JobAcctGatherFrequency=30
+MpiDefault={{ slurm_install_mpi_default }}
+PropagateResourceLimits=NONE
+KillWait=30
+MinJobAge=300
+InactiveLimit=0
+Waittime=0
+
+# Accounting
+AccountingStorageType=accounting_storage/slurmdbd
+AccountingStorageHost={{ slurm_install_dbd_host }}
+AccountingStoragePort=6819
+AccountingStorageEnforce=associations,limits,qos
+
+# Nodes and partitions
+{% for node in groups[slurm_install_workers_group] | default([]) %}
+{%   set facts = hostvars[node]['ansible_facts'] %}
+NodeName={{ node }} Sockets={{ facts['processor_count'] }} CoresPerSocket={{ facts['processor_cores'] }} ThreadsPerCore={{ facts['processor_threads_per_core'] }} RealMemory={{ facts['memtotal_mb'] - slurm_install_node_memory_reserve_mb | int }} State=UNKNOWN
+{% endfor %}
+{% if groups[slurm_install_workers_group] | default([]) | length > 0 %}
+PartitionName={{ slurm_install_partition_name }} Nodes={{ groups[slurm_install_workers_group] | join(',') }} Default=YES MaxTime=INFINITE State=UP
+{% endif %}

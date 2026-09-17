@@ -35,6 +35,13 @@ non-accounting Slurm functionality can live in the same collection.
   ``slurm_{cluster,qos,users}`` group_vars). Round-trip verified — a
   ``site.yml --check`` against the generated inventory is a no-op — by both a
   pure unit test and a live acceptance test.
+- ``slurm_install`` role and ``playbooks/install.yml``: install and configure
+  a static Slurm 25.11 cluster from the Ubuntu 26.04 archive — munge key
+  distribution, MariaDB + slurmdbd, slurmctld, slurmd with ``cgroup.conf``
+  memory/core limits, submit hosts — with optional ``/etc/hosts`` management,
+  custom templates, config from a git repo, a ``job_submit.lua`` plugin (an
+  auto-add-users script is included), and systemd drop-ins. Adds a dependency
+  on ``ansible.mariadb`` and raises the minimum ansible-core to 2.16.
 - Sample playbook + fully worked sample inventory under ``playbooks/``.
 - Self-contained docker test stack (``tests/docker/``), 7-scenario live
   acceptance suite (``tests/acceptance/``), pytest unit suite for the pure

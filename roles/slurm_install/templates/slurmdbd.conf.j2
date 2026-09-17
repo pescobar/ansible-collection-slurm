@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# See slurmdbd.conf(5).
+
+AuthType=auth/munge
+DbdHost=localhost
+DbdPort=6819
+SlurmUser=slurm
+DebugLevel=info
+LogFile=/var/log/slurm/slurmdbd.log
+PidFile=/run/slurmdbd/slurmdbd.pid
+
+StorageType=accounting_storage/mysql
+StorageHost=localhost
+StorageLoc={{ slurm_install_dbd_storage_db }}
+StorageUser={{ slurm_install_dbd_storage_user }}
+StoragePass={{ slurm_install_dbd_storage_password }}

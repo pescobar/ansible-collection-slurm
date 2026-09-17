@@ -1,0 +1,72 @@
+---
+- name: Work out what this host runs
+  ansible.builtin.set_fact:
+    _slurm_install_is_controller: "{{ inventory_hostname == slurm_install_controller_host }}"
+    _slurm_install_is_dbd: "{{ inventory_hostname == slurm_install_dbd_host }}"
+    _slurm_install_is_worker: "{{ slurm_install_workers_group in group_names }}"
+    _slurm_install_templated: "{{ slurm_install_config_git_repo | length == 0 }}"
+
+- name: Check the role variables
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_major_version'] is version('26', '>=')
+      - (groups[slurm_install_controller_group] | default([])) | length == 1
+      - slurm_install_cluster_name == slurm_install_cluster_name | lower
+      - not _slurm_install_is_dbd or slurm_install_dbd_storage_password is defined
+    fail_msg: >-
+      slurm_install needs Ubuntu 26.04 or newer, exactly one host in the
+      '{{ slurm_install_controller_group }}' group, a lowercase
+      slurm_install_cluster_name, and slurm_install_dbd_storage_password set
+      for the slurmdbd host.
+    quiet: true
+
+- name: Add every cluster host to /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED: Slurm cluster hosts"
+    block: |
+      {% for host in _slurm_install_cluster_hosts %}
+      {{ hostvars[host]['ansible_facts']['default_ipv4']['address'] }} {{ host }}
+      {% endfor %}
+  vars:
+    _slurm_install_cluster_hosts: >-
+      {{ ([slurm_install_controller_host, slurm_install_dbd_host]
+          + (groups[slurm_install_workers_group] | default([]))
+          + (groups[slurm_install_submit_group] | default([]))) | unique }}
+  when: slurm_install_manage_etc_hosts | bool
+
+- name: Install Slurm packages
+  ansible.builtin.apt:
+    name: >-
+      {{ slurm_install_packages_common
+         + (slurm_install_packages_controller if _slurm_install_is_controller else [])
+         + (slurm_install_packages_dbd if _slurm_install_is_dbd else [])
+         + (slurm_install_packages_worker if _slurm_install_is_worker else [])
+         + ([] if _slurm_install_templated else ['git', 'rsync']) }}
+    state: present
+    cache_valid_time: 3600
+
+- name: Configure munge
+  ansible.builtin.import_tasks: munge.yml
+
+- name: Deploy the systemd drop-ins
+  ansible.builtin.import_tasks: systemd_overrides.yml
+
+- name: Deploy the Slurm config files
+  ansible.builtin.import_tasks: config.yml
+
+- name: Configure slurmdbd
+  ansible.builtin.include_tasks: slurmdbd.yml
+  when: _slurm_install_is_dbd
+
+- name: Configure slurmctld
+  ansible.builtin.include_tasks: slurmctld.yml
+  when: _slurm_install_is_controller
+
+- name: Start slurmd
+  ansible.builtin.systemd_service:
+    name: slurmd
+    state: started
+    enabled: true
+  when: _slurm_install_is_worker

@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: Pablo Escobar Lopez
+  description: Install and configure a Slurm cluster from the Ubuntu archive packages
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+  galaxy_tags:
+    - slurm
+    - hpc
+dependencies: []

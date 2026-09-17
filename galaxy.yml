@@ -10,6 +10,8 @@ description: >-
   mechanism, plus an inventory importer driven by native Slurm commands.
   Scoped as a general Slurm collection so future non-accounting
   functionality can live here too.
+dependencies:
+  ansible.mariadb: ">=6.0.0"
 license:
   - MIT
 tags:

@@ -1,0 +1,39 @@
+-- {{ ansible_managed }}
+-- Adds a user to Slurm accounting (default account
+-- "{{ slurm_install_job_submit_autoadd_account }}") on their first job.
+-- Do not combine with slurm_acct_purge=true: purge deletes these users.
+
+function slurm_job_submit(job_desc, part_list, submit_uid)
+    -- submit_uid is a float since Slurm 23.11
+    submit_uid = math.floor(submit_uid)
+
+    local f = io.popen("getent passwd " .. submit_uid .. " | cut -d: -f1")
+    local username = f:read()
+    f:close()
+    if not username then
+        slurm.log_error("failed to look up uid " .. submit_uid)
+        return slurm.FAILURE
+    end
+
+    f = io.popen("sacctmgr --noheader show user " .. username)
+    local known = f:read()
+    f:close()
+    if not known then
+        -- os.execute returns a boolean on Lua 5.2+ (true on success)
+        local ok = os.execute("sacctmgr --immediate add user " .. username ..
+                              " DefaultAccount={{ slurm_install_job_submit_autoadd_account }}")
+        if not ok then
+            slurm.log_error("could not add user " .. username)
+            return slurm.FAILURE
+        end
+        slurm.log_info("added user " .. username)
+    end
+    return slurm.SUCCESS
+end
+
+function slurm_job_modify(job_desc, job_rec, part_list, modify_uid)
+    return slurm.SUCCESS
+end
+
+slurm.log_info("initialized")
+return slurm.SUCCESS

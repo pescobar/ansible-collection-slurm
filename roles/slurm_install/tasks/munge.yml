@@ -1,0 +1,48 @@
+---
+# The munge package generates a different key on every host; the
+# controller's key is the cluster key. The key is binary, so it is compared
+# by checksum and written through base64 -d (copy's content= is text-only).
+- name: Read the munge key from the controller
+  ansible.builtin.slurp:
+    src: /etc/munge/munge.key
+  delegate_to: "{{ slurm_install_controller_host }}"
+  run_once: true
+  register: _slurm_install_munge_key
+  no_log: true
+
+- name: Checksum the cluster munge key
+  ansible.builtin.stat:
+    path: /etc/munge/munge.key
+  delegate_to: "{{ slurm_install_controller_host }}"
+  run_once: true
+  register: _slurm_install_munge_key_ref
+
+- name: Checksum the local munge key
+  ansible.builtin.stat:
+    path: /etc/munge/munge.key
+  register: _slurm_install_munge_key_local
+
+- name: Deploy the cluster munge key
+  ansible.builtin.command:
+    argv: [sh, -c, "base64 -d > /etc/munge/munge.key"]
+    stdin: "{{ _slurm_install_munge_key['content'] }}"
+  when: >-
+    _slurm_install_munge_key_local['stat']['checksum'] | default('')
+    != _slurm_install_munge_key_ref['stat']['checksum']
+  changed_when: true
+  register: _slurm_install_munge_key_written
+  no_log: true
+
+- name: Set the munge key permissions
+  ansible.builtin.file:
+    path: /etc/munge/munge.key
+    owner: munge
+    group: munge
+    mode: "0600"
+
+# Restarted right away: the Slurm daemons started below need the final key.
+- name: Start munge (restart if its key changed)
+  ansible.builtin.systemd_service:
+    name: munge
+    state: "{{ 'restarted' if _slurm_install_munge_key_written is changed else 'started' }}"
+    enabled: true
