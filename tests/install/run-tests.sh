@@ -8,9 +8,10 @@
 # ansible-playbook/ansible-galaxy on PATH, and root or passwordless sudo.
 #
 # Asserts: install succeeds, a second run changes nothing, the node comes up
-# idle, jobs run, core and memory limits are enforced (a job over --mem ends
-# OUT_OF_MEMORY), slurm_acct converges and is then a --check no-op, a user
-# with an association can submit and a user without one is rejected.
+# idle, jobs run, a 1-CPU task is confined to one core, memory limits are
+# enforced (a job over --mem ends OUT_OF_MEMORY), slurm_acct converges and is
+# then a --check no-op, a user with an association can submit and a user
+# without one is rejected.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -101,9 +102,13 @@ done
 out="$(as_root srun -N1 hostname)"
 [ "$out" = "$host" ] || die "srun hostname returned '$out'"
 
-log "4. core limit: a 1-CPU job sees 1 CPU"
-out="$(as_root srun -c1 nproc)"
-[ "$out" = 1 ] || die "srun -c1 nproc returned '$out'"
+# CR_Core allocates whole cores: a 1-CPU task gets one core, i.e.
+# ThreadsPerCore CPUs (2 on the hyperthreaded GitHub runners), never more.
+log "4. core limit: a 1-CPU task is confined to one core"
+tpc="$(scontrol show node "$host" | grep -oP 'ThreadsPerCore=\K[0-9]+')"
+out="$(as_root srun -n1 -c1 nproc)"
+[ "$out" = "$tpc" ] && [ "$out" -lt "$(nproc)" ] \
+  || die "srun -n1 -c1 nproc returned '$out' (ThreadsPerCore=$tpc, host CPUs=$(nproc))"
 
 log "5. memory limit: within --mem completes, over --mem is OOM-killed"
 alloc() { echo "python3 -c 'b = bytearray($1 * 1024 * 1024); import time; time.sleep(2)'"; }

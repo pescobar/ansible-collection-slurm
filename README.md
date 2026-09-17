@@ -295,8 +295,8 @@ CI is split by concern:
   (`root-normal.sh`).
 - **`acceptance-install.yml`** — a complete `slurm_install` deployment on an
   `ubuntu-26.04` runner VM (`tests/install/run-tests.sh`), asserting: install,
-  a zero-change second run, the node comes up idle and runs jobs, core and
-  memory limits are enforced (a job over `--mem` ends `OUT_OF_MEMORY`), then
+  a zero-change second run, the node comes up idle and runs jobs, a 1-CPU
+  task is confined to one core, memory limits are enforced (a job over `--mem` ends `OUT_OF_MEMORY`), then
   `slurm_acct` loads the sample data (and is a `--check` no-op), a user with
   an association can submit and one without is rejected.
 - **`build-test-images.yml`** — builds and pushes the test images to GHCR
