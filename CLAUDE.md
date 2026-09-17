@@ -199,11 +199,17 @@ Lua auto-add plugin, systemd drop-ins.
   "Configured MailProg is invalid" (no `/usr/bin/mail`) — harmless.
 - In ansible-lint's template check, `inventory_hostname in <list>` fails;
   use `<group> in group_names`.
+- slurmctld resolves accounting users to uids when it loads associations:
+  a Unix user created *after* the accounting load is rejected ("Invalid
+  account", slurmctld logs "User N not found") until `scontrol reconfigure`.
+  The install test creates its users before running `site.yml`.
 
 Local test recipe (no CI needed): build an image `FROM ubuntu:26.04` with
 `systemd systemd-sysv python3 ansible-core sudo`, `CMD /sbin/init`, run it
 `--privileged --cgroupns=private`, mount the installed collections, and run
-`playbooks/install.yml` inside with `ansible_connection: local`.
+`playbooks/install.yml` inside with `ansible_connection: local` — or
+simply run `tests/install/run-tests.sh` inside it (mount the repo at
+`/src`; it passes there too).
 
 ## Bugs found and fixed (all verified on live clusters)
 
@@ -287,15 +293,18 @@ Local test recipe (no CI needed): build an image `FROM ubuntu:26.04` with
   (`tests/acceptance/root-normal.sh`, separate from the 7-scenario suite).
 - WCKey removal (currently stop-managing only).
 - **Slurm install role** — phase 1 DONE (`slurm_install`: Ubuntu 26.04,
-  archive packages, static config, see its section). Next, in order: CI
-  deployment test (below), then the scicore-courses-cloud repo deploys its
+  archive packages, static config, see its section). Phase 2 — CI
+  deployment test — is `acceptance-install.yml` running
+  `tests/install/run-tests.sh` (below). Next, in order: the
+  scicore-courses-cloud repo (github.com/scicore-unibas-ch/scicore-courses-cloud,
+  cloned next to this repo) deploys its
   OpenStack course cluster with it (static config), then configless mode
   (`sackd` on login nodes), OpenStack elastic scheduling (resume/suspend
   scripts, `clouds.yaml`), an aux script to build compute-node images,
   building `.deb`s from source, custom apt repos. Features of the old role
   intentionally dropped: RedHat/EPEL/OpenHPC, creating the slurm user (the
   package does it), `GIT_SSL_NO_VERIFY`.
-  CI decision already made: it gets its
+  CI design: its
   own workflow `acceptance-install.yml`, kept separate from
   `acceptance-management.yml` (the accounts/users/QOS suite). Use **tier 1 —
   run the role directly on the GitHub-hosted runner VM** (`hosts: localhost`,
@@ -304,7 +313,11 @@ Local test recipe (no CI needed): build an image `FROM ubuntu:26.04` with
   systemd unit start) far more faithfully than a container — matrix over the
   OS runner images (now just `ubuntu-26.04`). The CI must also verify
   resource limits (a job exceeding `--mem` ends `OUT_OF_MEMORY`) and run
-  `slurm_acct` against the installed cluster. Only reach for tier 2
+  `slurm_acct` against the installed cluster (the sample inventory, re-pointed
+  at the runner; it needs partition `cpu`, cluster `linux` and
+  `GresTypes=gpu` + `AccountingStorageTRES=gres/gpu` via
+  `slurm_install_slurm_conf_extra`). The runner image ships MySQL 8.4
+  (disabled) — the workflow purges it before MariaDB is installed. Only reach for tier 2
   (Vagrant + libvirt/KVM real VMs; `/dev/kvm` is available on Linux runners)
   if distros the runner images don't provide (RHEL/Rocky/…) or multi-node must
   be covered. NOT a container job — the management suite uses containers only

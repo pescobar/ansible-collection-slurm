@@ -3,7 +3,7 @@ name: CI
 # Fast, dependency-free checks that run on every push/PR. The live-cluster
 # acceptance suites are separate workflows so each can evolve independently:
 #   - acceptance-management.yml  accounts/users/QOS (the slurm_acct role) — now
-#   - a future acceptance-install.yml for the planned Slurm install role
+#   - acceptance-install.yml     full slurm_install deployment on a runner VM
 # and the test-cluster images they use come from build-test-images.yml.
 
 on:
