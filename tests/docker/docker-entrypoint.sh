@@ -31,6 +31,16 @@ echo "---> Starting the MUNGE Authentication service (munged) ..."
 mkdir -p /run/munge
 chown munge:munge /run/munge
 chmod 0755 /run/munge
+
+# Generate the MUNGE key on first boot, not at build time — a key baked into
+# the image would be identical (and pullable) across every container built
+# from this Dockerfile. Shared via the etc_munge volume with slurmctld.
+if [ ! -s /etc/munge/munge.key ]; then
+    dd if=/dev/urandom of=/etc/munge/munge.key bs=1 count=1024
+    chown munge:munge /etc/munge/munge.key
+    chmod 0400 /etc/munge/munge.key
+fi
+
 gosu munge /usr/sbin/munged
 
 if [ "$1" = "slurmdbd" ]; then
