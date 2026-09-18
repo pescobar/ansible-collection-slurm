@@ -307,7 +307,12 @@ simply run `tests/install/run-tests.sh` inside it (mount the repo at
   end_host`). Next, in order: configless mode
   (`sackd` on login nodes), OpenStack elastic scheduling (resume/suspend
   scripts, `clouds.yaml`), an aux script to build compute-node images,
-  building `.deb`s from source, custom apt repos. Features of the old role
+  building `.deb`s from source, custom apt repos. The design decisions for
+  configless + elastic nodes (agreed 2026-09-18: delete/create VMs, plain
+  OpenStack DNS with no `/etc/hosts` and no pinned ports, pre-built compute
+  image) are in scicore-courses-cloud's CLAUDE.md, section "Current work";
+  the elastic parts stay generic here, the OpenStack specifics may live in
+  the courses repo. Features of the old role
   intentionally dropped: RedHat/EPEL/OpenHPC, creating the slurm user (the
   package does it), `GIT_SSL_NO_VERIFY`.
   CI design: its
