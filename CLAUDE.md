@@ -295,10 +295,16 @@ simply run `tests/install/run-tests.sh` inside it (mount the repo at
 - **Slurm install role** — phase 1 DONE (`slurm_install`: Ubuntu 26.04,
   archive packages, static config, see its section). Phase 2 — CI
   deployment test — is `acceptance-install.yml` running
-  `tests/install/run-tests.sh` (below). Next, in order: the
+  `tests/install/run-tests.sh` (below). Phase 3 DONE (2026-09-17): the
   scicore-courses-cloud repo (github.com/scicore-unibas-ch/scicore-courses-cloud,
-  cloned next to this repo) deploys its
-  OpenStack course cluster with it (static config), then configless mode
+  cloned next to this repo, see its CLAUDE.md) deploys its OpenStack course
+  cluster with this role — verified live on a 5-VM dev cluster (Ubuntu 26.04,
+  static config, lua auto-add plugin): jobs run as a course user, accounting
+  auto-add works, over-`--mem` jobs are OOM-killed. Its PRs #29/#30 also had
+  to bump ansible to 14.4.0 (the openstack inventory plugin bundled with
+  ansible 10 breaks on openstacksdk 4) and willshersystems.sshd to v0.34.0
+  (v0.27.1 does not know Ubuntu 26.04 and ends the play with `meta:
+  end_host`). Next, in order: configless mode
   (`sackd` on login nodes), OpenStack elastic scheduling (resume/suspend
   scripts, `clouds.yaml`), an aux script to build compute-node images,
   building `.deb`s from source, custom apt repos. Features of the old role
