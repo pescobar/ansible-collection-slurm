@@ -368,6 +368,29 @@ the host has none — no distro python packages are involved, so the same
 recipe works on other distros. Point
 `slurm_install_cloud_python_interpreter` at another interpreter to skip that.
 
+#### Cleaning up afterwards
+
+The compute nodes and the image are **not** managed by your infrastructure
+tool: slurmctld creates the nodes, the build creates the image, so
+`tofu destroy` (or the equivalent) leaves them behind, still costing money
+and quota. `playbooks/cleanup_cloud_resources.yml` removes them:
+
+```sh
+# preview
+ansible-playbook -i inventory/hosts.yml pescobar.slurm.cleanup_cloud_resources --check
+# delete the leftover nodes and any image builder
+ansible-playbook -i inventory/hosts.yml pescobar.slurm.cleanup_cloud_resources
+# and the image too
+ansible-playbook -i inventory/hosts.yml pescobar.slurm.cleanup_cloud_resources \
+  -e '{"slurm_cleanup_images": ["my-compute-image"]}'
+```
+
+It matches servers by the cloud node definitions: `compute-[01-04]` deletes
+names that are `compute-` followed by digits, so a VM called
+`compute-node-other` is left alone. Images are never deleted unless named,
+and detached volumes only with `slurm_cleanup_orphan_volumes=true` (a node's
+own volume goes with the node; anything else detached may not be yours).
+
 #### The compute-node image
 
 A created node must boot ready to run jobs: slurmd, the munge key and
