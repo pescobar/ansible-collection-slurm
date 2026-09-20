@@ -213,6 +213,16 @@
         - name: Gather facts
           ansible.builtin.setup:
 
+        # A freshly booted Ubuntu cloud image runs unattended-upgrades, which
+        # holds the dpkg lock. The apt module waits only 60 s by default, so
+        # the first apt task of any role fails with "Unable to acquire the
+        # dpkg frontend lock". Wait it out here, once, instead.
+        - name: Wait for the first-boot package activity to finish
+          ansible.builtin.apt:
+            update_cache: true
+            lock_timeout: "{{ compute_image_apt_lock_timeout | default(900) }}"
+          when: ansible_facts['os_family'] == 'Debian'
+
         - name: Apply the Slurm compute node configuration
           ansible.builtin.include_role:
             name: pescobar.slurm.slurm_compute_image
