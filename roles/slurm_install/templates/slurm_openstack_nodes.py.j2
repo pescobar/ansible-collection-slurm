@@ -1,0 +1,404 @@
+#!{{ slurm_install_cloud_python_interpreter }}
+# {{ ansible_managed }}
+# The interpreter above comes from slurm_install_cloud_python_interpreter
+# (default /usr/bin/python3, which gets the openstack module from the
+# python3-openstacksdk package; point it at a venv to use another one).
+"""Slurm ResumeProgram / SuspendProgram for OpenStack cloud nodes.
+
+Invoked by slurmctld as SlurmUser with one argument, a Slurm hostlist
+expression (e.g. "compute-[01-04]"). The mode comes from the name the script
+is called as, so slurm.conf can point at a plain path with no arguments:
+
+    slurm_openstack_resume   -> create a VM per node
+    slurm_openstack_suspend  -> delete the VM of each node
+
+Each node's VM is described by its Features in slurm.conf, e.g.
+
+    NodeName=compute-[01-04] State=CLOUD CPUs=4 RealMemory=7820 \
+      Features=image=compute-image,flavor=c002r004,keypair=mykey,\
+network=mynet,security_groups=default|slurm
+
+`security_groups` takes several names separated by '|'; every other feature
+is a single value. Features that are not in the list above are ignored, so
+Slurm features used for job constraints can live alongside these.
+
+OpenStack credentials come from clouds.yaml, normally /etc/openstack/
+clouds.yaml readable by SlurmUser only; the entry is DEFAULT_CLOUD below,
+or OS_CLOUD when that is set.
+
+Logging: everything at INFO and above goes to the log file (DEFAULT_LOG_FILE
+below, override with SLURM_OPENSTACK_LOG);
+warnings and errors also go to syslog. Slurm does not capture the stdout or
+stderr of these programs, so all output goes through the logger.
+
+Exit status is non-zero if any node failed, which slurmctld records; nodes
+that fail to come up in ResumeTimeout are handled by ResumeFailProgram.
+"""
+
+import logging
+import logging.handlers
+import os
+import subprocess
+import sys
+
+DEFAULT_LOG_FILE = "{{ slurm_install_cloud_log_file }}"
+DEFAULT_CLOUD = "{{ slurm_install_cloud_name }}"  # the clouds.yaml entry
+# Features read from slurm.conf; anything else is left to Slurm.
+VM_FEATURES = ("image", "flavor", "network", "keypair", "security_groups")
+SECURITY_GROUP_SEPARATOR = "|"
+# Seconds to wait for a created VM to become ACTIVE. Keep it below
+# ResumeTimeout in slurm.conf so a failure is logged before Slurm gives up.
+CREATE_TIMEOUT = 300
+
+log = logging.getLogger("slurm_openstack_nodes")
+
+
+def setup_logging(argv0):
+    """Log INFO+ to the log file and WARNING+ to syslog as well."""
+    log.setLevel(logging.INFO)
+    name = os.path.basename(argv0)
+    fmt = logging.Formatter(
+        f"%(asctime)s {name}[%(process)d] %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    log_file = os.environ.get("SLURM_OPENSTACK_LOG", DEFAULT_LOG_FILE)
+    try:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(fmt)
+        log.addHandler(file_handler)
+    except OSError as err:
+        # Keep going with syslog only: losing the log file must not stop
+        # nodes from being created or deleted.
+        print(f"cannot open {log_file}: {err}", file=sys.stderr)
+
+    try:
+        syslog_handler = logging.handlers.SysLogHandler("/dev/log")
+        syslog_handler.setFormatter(logging.Formatter(f"{name}[%(process)d]: %(levelname)s %(message)s"))
+        syslog_handler.setLevel(logging.WARNING)
+        log.addHandler(syslog_handler)
+    except OSError as err:
+        print(f"cannot connect to syslog: {err}", file=sys.stderr)
+
+    if not log.handlers:
+        logging.basicConfig(level=logging.INFO)
+        log.error("no log handler available, falling back to stderr")
+
+
+def run_scontrol(args):
+    """Run scontrol and return its stdout, or None if the call failed."""
+    try:
+        done = subprocess.run(
+            ["scontrol"] + args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=60,
+            check=True,
+        )
+    except subprocess.CalledProcessError as err:
+        log.error("scontrol %s failed (rc=%s): %s", " ".join(args), err.returncode, err.stderr.strip())
+        return None
+    except (subprocess.TimeoutExpired, OSError) as err:
+        log.error("scontrol %s failed: %s", " ".join(args), err)
+        return None
+    return done.stdout
+
+
+def expand_nodes(hostlist_expr):
+    """Expand a Slurm hostlist expression into a list of node names."""
+    out = run_scontrol(["show", "hostnames", hostlist_expr])
+    if out is None:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def parse_features(scontrol_output):
+    """Map node name -> {feature: value} from `scontrol show node` output."""
+    features = {}
+    node = None
+    for line in scontrol_output.splitlines():
+        line = line.strip()
+        if line.startswith("NodeName="):
+            node = line.split()[0].split("=", 1)[1]
+        elif line.startswith("AvailableFeatures=") and node:
+            value = line.split("=", 1)[1].strip()
+            node_features = {}
+            if value and value != "(null)":
+                for item in value.split(","):
+                    if "=" not in item:
+                        continue  # a plain constraint feature, not ours
+                    key, _, val = item.partition("=")
+                    node_features[key.strip()] = val.strip()
+            features[node] = node_features
+    return features
+
+
+def get_features(hostlist_expr):
+    out = run_scontrol(["show", "node", hostlist_expr])
+    if out is None:
+        return {}
+    return parse_features(out)
+
+
+def get_state_save_location():
+    """Slurm's StateSaveLocation, where the VM ids are recorded."""
+    out = run_scontrol(["show", "config"])
+    if out is None:
+        return None
+    for line in out.splitlines():
+        if line.startswith("StateSaveLocation"):
+            return line.split()[-1]
+    log.error("StateSaveLocation not found in scontrol show config")
+    return None
+
+
+def instance_id_path(statedir, node):
+    return os.path.join(statedir, f"{node}.openstack-id") if statedir else None
+
+
+def record_instance_id(statedir, node, server_id):
+    path = instance_id_path(statedir, node)
+    if not path:
+        return
+    try:
+        with open(path, "w") as handle:
+            handle.write(server_id)
+    except OSError as err:
+        # Not fatal: suspend falls back to looking the VM up by name.
+        log.warning("node=%s cannot record instance id in %s: %s", node, path, err)
+
+
+def read_instance_id(statedir, node):
+    path = instance_id_path(statedir, node)
+    if not path:
+        return None
+    try:
+        with open(path) as handle:
+            return handle.read().strip() or None
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        log.warning("node=%s cannot read %s: %s", node, path, err)
+        return None
+
+
+def forget_instance_id(statedir, node):
+    path = instance_id_path(statedir, node)
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as err:
+        log.warning("node=%s cannot remove %s: %s", node, path, err)
+
+
+def connect():
+    """Open an OpenStack connection, or return None with the reason logged."""
+    try:
+        import openstack
+    except ImportError as err:
+        log.error("the openstacksdk python module is not installed: %s", err)
+        return None
+    try:
+        conn = openstack.connect(cloud=os.environ.get("OS_CLOUD", DEFAULT_CLOUD))
+        # from_config() is lazy: force a call so bad credentials are reported
+        # here rather than as a confusing failure further down.
+        conn.authorize()
+    except Exception as err:  # openstacksdk raises many unrelated types
+        log.error("cannot connect to the OpenStack API: %s", err)
+        return None
+    return conn
+
+
+def resolve_vm_parameters(conn, node, features):
+    """Look up the OpenStack objects named by a node's features.
+
+    Returns the create_server kwargs, or None when something is missing.
+    """
+    missing = [f for f in VM_FEATURES if f not in features]
+    if missing:
+        log.error("node=%s slurm.conf Features lack %s", node, ",".join(missing))
+        return None
+
+    lookups = {
+        "image": (conn.compute.find_image, features["image"]),
+        "flavor": (conn.compute.find_flavor, features["flavor"]),
+        "network": (conn.network.find_network, features["network"]),
+        "keypair": (conn.compute.find_keypair, features["keypair"]),
+    }
+    found = {}
+    for kind, (finder, name) in lookups.items():
+        try:
+            found[kind] = finder(name, ignore_missing=True)
+        except Exception as err:
+            log.error("node=%s looking up %s '%s' failed: %s", node, kind, name, err)
+            return None
+        if found[kind] is None:
+            log.error("node=%s %s '%s' does not exist in OpenStack", node, kind, name)
+            return None
+
+    groups = []
+    for name in features["security_groups"].split(SECURITY_GROUP_SEPARATOR):
+        name = name.strip()
+        if not name:
+            continue
+        try:
+            group = conn.network.find_security_group(name, ignore_missing=True)
+        except Exception as err:
+            log.error("node=%s looking up security group '%s' failed: %s", node, name, err)
+            return None
+        if group is None:
+            log.error("node=%s security group '%s' does not exist in OpenStack", node, name)
+            return None
+        groups.append({"name": group.name})
+    if not groups:
+        log.error("node=%s no security group in Features", node)
+        return None
+
+    return {
+        "name": node,
+        "image_id": found["image"].id,
+        "flavor_id": found["flavor"].id,
+        "networks": [{"uuid": found["network"].id}],
+        "key_name": found["keypair"].name,
+        "security_groups": groups,
+    }
+
+
+def delete_existing_server(conn, node):
+    """Delete a VM left over from a previous run, so the name is free.
+
+    Slurm only resumes a node it believes is powered down, so an existing VM
+    of that name holds no jobs.
+    """
+    try:
+        server = conn.compute.find_server(node, ignore_missing=True)
+    except Exception as err:
+        log.error("node=%s cannot check for an existing VM: %s", node, err)
+        return False
+    if server is None:
+        return True
+    log.warning("node=%s deleting leftover VM id=%s before creating a new one", node, server.id)
+    try:
+        conn.compute.delete_server(server.id)
+        conn.compute.wait_for_delete(server, wait=CREATE_TIMEOUT)
+    except Exception as err:
+        log.error("node=%s deleting the leftover VM id=%s failed: %s", node, server.id, err)
+        return False
+    return True
+
+
+def resume_node(conn, node, features, statedir):
+    """Create one node's VM. Returns True on success."""
+    params = resolve_vm_parameters(conn, node, features)
+    if params is None:
+        return False
+    if not delete_existing_server(conn, node):
+        return False
+
+    log.info("node=%s creating VM image=%s flavor=%s", node, features["image"], features["flavor"])
+    try:
+        server = conn.compute.create_server(**params)
+    except Exception as err:
+        log.error("node=%s creating the VM failed: %s", node, err)
+        return False
+
+    record_instance_id(statedir, node, server.id)
+
+    try:
+        server = conn.compute.wait_for_server(server, wait=CREATE_TIMEOUT)
+    except Exception as err:
+        log.error("node=%s VM id=%s did not become ACTIVE: %s", node, server.id, err)
+        # A half-created VM would block the next resume on the same name.
+        try:
+            conn.compute.delete_server(server.id)
+            log.warning("node=%s deleted the failed VM id=%s", node, server.id)
+        except Exception as delete_err:
+            log.error("node=%s could not delete the failed VM id=%s: %s", node, server.id, delete_err)
+        forget_instance_id(statedir, node)
+        return False
+
+    log.info("node=%s VM id=%s is ACTIVE", node, server.id)
+    return True
+
+
+def suspend_node(conn, node, statedir):
+    """Delete one node's VM. Returns True on success."""
+    server_id = read_instance_id(statedir, node)
+    try:
+        if server_id:
+            server = conn.compute.find_server(server_id, ignore_missing=True)
+        else:
+            server = conn.compute.find_server(node, ignore_missing=True)
+            if server is not None:
+                log.warning("node=%s no recorded instance id, found VM id=%s by name", node, server.id)
+    except Exception as err:
+        log.error("node=%s cannot look up the VM: %s", node, err)
+        return False
+
+    if server is None:
+        # Already gone: the goal state is reached, so this is not a failure.
+        log.warning("node=%s has no VM to delete", node)
+        forget_instance_id(statedir, node)
+        return True
+
+    log.info("node=%s deleting VM id=%s", node, server.id)
+    try:
+        conn.compute.delete_server(server.id)
+    except Exception as err:
+        log.error("node=%s deleting VM id=%s failed: %s", node, server.id, err)
+        return False
+
+    forget_instance_id(statedir, node)
+    return True
+
+
+def main(argv):
+    setup_logging(argv[0])
+
+    mode = "resume" if "resume" in os.path.basename(argv[0]) else "suspend"
+    if len(argv) < 2:
+        log.error("usage: %s <slurm hostlist expression>", argv[0])
+        return 2
+
+    hostlist_expr = argv[1]
+    nodes = expand_nodes(hostlist_expr)
+    if not nodes:
+        log.error("%s: cannot expand hostlist '%s'", mode, hostlist_expr)
+        return 1
+    log.info("%s %s (%d node(s))", mode, hostlist_expr, len(nodes))
+
+    conn = connect()
+    if conn is None:
+        log.error("%s of %s aborted: no OpenStack connection", mode, hostlist_expr)
+        return 1
+
+    statedir = get_state_save_location()
+    features = get_features(hostlist_expr) if mode == "resume" else {}
+
+    failed = []
+    for node in nodes:
+        try:
+            if mode == "resume":
+                ok = resume_node(conn, node, features.get(node, {}), statedir)
+            else:
+                ok = suspend_node(conn, node, statedir)
+        except Exception:
+            # One bad node must not stop the rest of the batch.
+            log.exception("node=%s unexpected error during %s", node, mode)
+            ok = False
+        if not ok:
+            failed.append(node)
+
+    if failed:
+        log.error("%s failed for %d of %d node(s): %s", mode, len(failed), len(nodes), ",".join(failed))
+        return 1
+    log.info("%s finished for %s", mode, hostlist_expr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

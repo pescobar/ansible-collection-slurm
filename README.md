@@ -254,7 +254,9 @@ Options (see `roles/slurm_install/defaults/main.yml` for all variables):
 | `slurm_install_manage_etc_hosts` | add every cluster host to `/etc/hosts` |
 | `slurm_install_configless` | [configless mode](https://slurm.schedmd.com/configless_slurm.html): only the controller holds `slurm.conf`; workers (`slurmd`) and submit hosts (`sackd`) fetch it from slurmctld and cache it under `/run/slurm/conf`. The role adds `enable_configless` to `SlurmctldParameters`, writes `--conf-server` into `/etc/default/{slurmd,sackd}`, installs `sackd` on the submit hosts, removes the local `slurm.conf`/`cgroup.conf` from the non-controller hosts, and runs `scontrol reconfigure` when the config changes |
 | `slurm_install_conf_server` | `host[:port]` the workers and submit hosts fetch from (default: the controller on 6817) |
-| `slurm_install_slurmctld_parameters` | extra `SlurmctldParameters` (list), e.g. `['idle_on_node_suspend']` |
+| `slurm_install_slurmctld_parameters` | extra `SlurmctldParameters` (list), e.g. `['cloud_reg_addrs']` |
+| `slurm_install_cloud_scheduling` | [elastic nodes](https://slurm.schedmd.com/elastic_computing.html) on OpenStack: Slurm creates a VM per node when jobs need one and deletes it after `slurm_install_cloud_suspend_time` idle seconds. Needs configless mode and DNS that resolves the node names. See the section below |
+| `slurm_install_cloud_nodes` | the node groups Slurm may create (name expression, CPUs, memory, image, flavor, network, keypair, security groups) |
 | `slurm_install_slurm_conf_template` (and `_cgroup_conf_`, `_slurmdbd_conf_`) | use your own template |
 | `slurm_install_slurm_conf_extra` | extra lines appended to the built-in `slurm.conf` (e.g. `GresTypes=gpu`) |
 | `slurm_install_config_git_repo` | take `/etc/slurm` from a git repo instead (all files except `slurmdbd.conf`, which always comes from the template because it holds the DB password) |
@@ -263,6 +265,48 @@ Options (see `roles/slurm_install/defaults/main.yml` for all variables):
 
 The role depends on the `ansible.mariadb` collection (installed
 automatically with this collection).
+
+### Elastic OpenStack compute nodes
+
+With `slurm_install_cloud_scheduling: true` the controller gets a
+`ResumeProgram`/`SuspendProgram` pair that creates and deletes OpenStack VMs,
+so idle compute nodes cost nothing. It needs `slurm_install_configless: true`
+(a created node has no local `slurm.conf` and fetches it from slurmctld) and
+DNS that resolves the node names to the new VMs, e.g. Neutron's internal DNS.
+
+```yaml
+slurm_install_configless: true
+slurm_install_cloud_scheduling: true
+slurm_install_cloud_auth_url: https://keystone.example.org/v3
+slurm_install_cloud_application_credential_id: "{{ vaulted_id }}"
+slurm_install_cloud_application_credential_secret: "{{ vaulted_secret }}"
+slurm_install_cloud_region_name: myregion
+slurm_install_cloud_nodes:
+  - name: compute-[01-08]
+    cpus: 2
+    real_memory: 3500
+    image: my-compute-image      # must have slurmd + munge key installed
+    flavor: c002r004
+    network: my-network
+    keypair: my-keypair
+    security_groups: [default, slurm]
+```
+
+Each node group becomes a `State=CLOUD` node line whose `Features` carry the
+VM settings; the resume program reads them back with `scontrol show node`.
+The role writes the credentials to `/etc/openstack/clouds.yaml` (0600,
+SlurmUser) and builds a venv for the OpenStack sdk with
+[uv](https://docs.astral.sh/uv/), which it downloads (checksum verified) when
+the host has none — no distro python packages are involved, so the same
+recipe works on other distros. Point
+`slurm_install_cloud_python_interpreter` at another interpreter to skip that.
+
+The programs log every event at INFO to
+`/var/log/slurm/dynamic_nodes.log` (rotated weekly) and repeat warnings and
+errors to syslog; Slurm does not capture their output itself. A node whose
+VM cannot be created is logged and left for Slurm to mark DOWN after
+`ResumeTimeout`, and a failure on one node does not stop the rest of the
+batch. Add `DebugFlags=Power` to see slurmctld's side of the decisions.
 
 ## Development / testing
 
@@ -346,7 +390,6 @@ ansible-playbook -i imported_inventory/hosts.yml site.yml --check --diff
 
 ## Roadmap
 
-- `slurm_install`: CI deployment test on an Ubuntu 26.04 runner VM,
-  OpenStack elastic scheduling, a
+- `slurm_install`: CI deployment test on an Ubuntu 26.04 runner VM, a
   script to build compute-node images, building Slurm `.deb` packages from
   source, and custom apt repositories.

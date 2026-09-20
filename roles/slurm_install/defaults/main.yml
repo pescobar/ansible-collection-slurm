@@ -36,8 +36,82 @@ slurm_install_conf_server: "{{ slurm_install_controller_host }}:6817"
 
 # SlurmctldParameters for the built-in slurm.conf, as a list.
 # 'enable_configless' is added automatically when slurm_install_configless is
-# true. Example: ['idle_on_node_suspend'].
+# true, 'idle_on_node_suspend' when cloud scheduling is on (below).
+# Example: ['cloud_reg_addrs'] when the nodes' IPs are not in DNS.
 slurm_install_slurmctld_parameters: []
+
+# --- Elastic ("cloud") compute nodes on OpenStack -------------------------
+# Nodes are created when jobs need them and deleted when they stay idle
+# (https://slurm.schedmd.com/elastic_computing.html). The role deploys the
+# resume/suspend program on the controller together with the credentials it
+# uses. Requires configless mode (the nodes have no local slurm.conf) and
+# DNS that resolves the node names to the new VMs.
+slurm_install_cloud_scheduling: false
+
+# The nodes Slurm may create, as a list of node groups. 'name' is a Slurm
+# hostlist expression; the VM settings become node Features, which the
+# resume program reads. Sockets/CoresPerSocket/ThreadsPerCore are optional.
+# Example:
+#   slurm_install_cloud_nodes:
+#     - name: compute-[01-04]
+#       cpus: 2
+#       real_memory: 3500
+#       image: course-compute-image
+#       flavor: c002r004
+#       network: my-network
+#       keypair: my-keypair
+#       security_groups: [default, slurm]
+#       extra: "MemSpecLimit=512"   # appended to the NodeName line
+slurm_install_cloud_nodes: []
+
+# Which partition the cloud nodes join (defaults to the role's partition).
+slurm_install_cloud_partition_name: "{{ slurm_install_partition_name }}"
+
+# Power-saving timings (seconds). SuspendTime is how long a node may sit idle
+# before it is deleted; ResumeTimeout must cover a VM boot plus slurmd
+# registering, or Slurm marks the node DOWN.
+slurm_install_cloud_suspend_time: 600
+slurm_install_cloud_resume_timeout: 600
+slurm_install_cloud_suspend_timeout: 180
+# Nodes created/deleted per minute (0 = no limit).
+slurm_install_cloud_resume_rate: 4
+slurm_install_cloud_suspend_rate: 4
+# Nodes/partitions never suspended, e.g. 'static' or 'compute-01'.
+slurm_install_cloud_suspend_exc_nodes: ""
+slurm_install_cloud_suspend_exc_parts: ""
+
+# Where the resume/suspend program and its log live.
+slurm_install_cloud_program_dir: /usr/local/sbin
+slurm_install_cloud_log_file: /var/log/slurm/dynamic_nodes.log
+slurm_install_cloud_logrotate: true
+
+# The program needs the 'openstack' python module. The role builds a venv for
+# it with uv rather than using distro packages, which keeps the sdk version
+# under your control and the recipe portable to other distros. uv itself is
+# not packaged by Ubuntu, so the role downloads the release binary (checksum
+# verified) unless one is already installed.
+slurm_install_cloud_venv_path: /opt/slurm-openstack
+slurm_install_cloud_openstacksdk: openstacksdk  # e.g. 'openstacksdk==4.8.0' to pin
+slurm_install_cloud_uv_install: true
+slurm_install_cloud_uv_path: /usr/local/bin/uv
+slurm_install_cloud_uv_version: 0.12.17
+slurm_install_cloud_uv_url: >-
+  https://github.com/astral-sh/uv/releases/download/{{ slurm_install_cloud_uv_version }}/uv-{{
+  ansible_facts['architecture'] }}-unknown-linux-gnu.tar.gz
+# Interpreter the deployed program runs under; the venv's by default.
+slurm_install_cloud_python_interpreter: "{{ slurm_install_cloud_venv_path }}/bin/python3"
+
+# OpenStack credentials for the resume/suspend program, written to
+# /etc/openstack/clouds.yaml (0600, owned by SlurmUser) on the controller.
+# Use an application credential and keep the secret in ansible-vault.
+slurm_install_cloud_name: openstack
+slurm_install_cloud_auth_url: ""
+slurm_install_cloud_application_credential_id: ""
+slurm_install_cloud_application_credential_secret: ""
+slurm_install_cloud_region_name: ""
+slurm_install_cloud_interface: public
+# Set false to keep your own /etc/openstack/clouds.yaml (deployed elsewhere).
+slurm_install_cloud_manage_clouds_yaml: true
 
 # Packages per host type (Ubuntu archive names).
 slurm_install_packages_common:

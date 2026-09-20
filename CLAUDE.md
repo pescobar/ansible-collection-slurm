@@ -216,6 +216,38 @@ Lua auto-add plugin, systemd drop-ins.
   **`--conf-server` beats a local `slurm.conf`**, so switching a cluster back
   to static must delete that line from `/etc/default/{slurmd,sackd}`, which
   the role does; both directions were tested and are idempotent.
+- **Elastic OpenStack nodes** (`slurm_install_cloud_scheduling`, done
+  2026-09-20). `roles/slurm_install/templates/slurm_openstack_nodes.py.j2` is
+  one program deployed as `slurm_openstack_{resume,suspend}` symlinks (the
+  mode comes from argv[0], so slurm.conf can name a path with no arguments,
+  which Slurm does not support). VM settings ride on the node `Features`
+  (image/flavor/network/keypair/security_groups, groups split on `|`), read
+  back with `scontrol show node`; the created VM's id is recorded in
+  StateSaveLocation as `<node>.openstack-id` so suspend deletes the right
+  server, falling back to a lookup by name. Ported from the old
+  scicore.slurm role's stackhpc-derived scripts, with the error handling
+  fixed: the connection is verified up front (the old one logged the failure
+  and carried on with an unbound `conn`), each node is independent, a VM that
+  never becomes ACTIVE is deleted so the name is free, and the exit status is
+  non-zero if any node failed.
+  Logging (asked for explicitly): INFO+ to `/var/log/slurm/dynamic_nodes.log`
+  (logrotate weekly), WARNING+ **also** to syslog. Slurm captures neither
+  stdout nor stderr of these programs ("the stderr and stdout of the suspend
+  and resume programs are not logged" - power_save.html), and writing into
+  slurmctld.log from another process would fight its log rotation.
+  slurm.conf gets `CommunicationParameters=NoAddrCache` (a re-created node
+  gets a new IP), `PrivateData=cloud` and `idle_on_node_suspend`.
+  The openstacksdk lives in a uv-built venv (`/opt/slurm-openstack`), not
+  distro packages: the user asked for uv, it keeps the sdk version under our
+  control and the recipe portable to other distros. uv is NOT in the Ubuntu
+  archive (only Rust crate sources), so the role downloads the release
+  tarball. `python3-openstacksdk` 4.8.0 does exist in 26.04 if that is ever
+  preferred; pip into the system python is blocked (PEP 668).
+  Verified on the same 3-container cluster with dummy credentials: config
+  rendered, venv built, `sinfo` shows the cloud nodes `idle~`, the resume
+  program fails cleanly with an unreachable endpoint (error in both logs,
+  exit 1), and a second run is `changed=0`. **Not yet tested against a real
+  OpenStack cloud** - that needs the courses repo's dev deployment.
 - `ansible-galaxy collection install` has **no `-q` flag**: passing it fails
   the install silently in a pipeline and leaves a stale collection installed
   (cost an hour of confusing test results).
@@ -326,8 +358,9 @@ simply run `tests/install/run-tests.sh` inside it (mount the repo at
   (v0.27.1 does not know Ubuntu 26.04 and ends the play with `meta:
   end_host`). Next, in order: configless mode
   (DONE 2026-09-20: `slurm_install_configless`, `sackd` on submit hosts),
-  OpenStack elastic scheduling (resume/suspend
-  scripts, `clouds.yaml`), an aux script to build compute-node images,
+  OpenStack elastic scheduling (DONE 2026-09-20:
+  `slurm_install_cloud_scheduling`), an aux script to build compute-node
+  images,
   building `.deb`s from source, custom apt repos. The design decisions for
   configless + elastic nodes (agreed 2026-09-18: delete/create VMs, plain
   OpenStack DNS with no `/etc/hosts` and no pinned ports, pre-built compute
