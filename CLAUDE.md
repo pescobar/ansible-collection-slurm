@@ -320,6 +320,13 @@ Lua auto-add plugin, systemd drop-ins.
   `slurm_install_cloud_name` stays what it always was: the entry in the
   clouds.yaml written ON THE CONTROLLER for the resume/suspend programs - not
   the control host's own credentials. Both paths verified against SWITCH.
+  **unattended-upgrades** holds the dpkg lock on a freshly booted Ubuntu
+  cloud image, and the apt module waits only 60 s, so the first apt task of
+  any site role failed with "Unable to acquire the dpkg frontend lock"
+  (reported 2026-09-20). One task at the top of the builder play waits it out
+  (`update_cache` with `lock_timeout`, 900 s) - deliberately NOT masking the
+  apt timers, which needed an undo step in the cleanup and was more machinery
+  than the problem deserves.
   Two Ansible traps found here: `delegate_to` is resolved even for a task
   whose `when` is false, and even inside a block with that `when`, so a
   possibly-empty delegate host needs a ternary fallback; and `cloud-init
