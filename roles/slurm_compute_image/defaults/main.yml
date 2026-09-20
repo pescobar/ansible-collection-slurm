@@ -1,0 +1,34 @@
+---
+# Prepare a machine to become a compute-node image: the Slurm side of a node
+# that slurmctld will create on demand (see slurm_install_cloud_scheduling).
+# Everything site-specific (users, shared filesystems, software) is applied by
+# your own roles in the same play, before this role's cleanup runs.
+
+# Where the node fetches its config from at boot (configless mode). A cloud
+# node has no local slurm.conf: slurmd asks slurmctld for it.
+slurm_compute_image_conf_server: "{{ slurm_install_conf_server | default('') }}"
+
+# Packages the image needs to act as a compute node.
+slurm_compute_image_packages:
+  - slurmd
+  - munge
+
+# The munge key baked into the image. Either point at a file on the control
+# host, or name an inventory host to read /etc/munge/munge.key from (normally
+# the controller). The key is a cluster secret: keep the image private, since
+# anyone who can boot it can read the key.
+slurm_compute_image_munge_key_file: ""
+slurm_compute_image_munge_key_host: ""
+
+# Leave slurmd enabled so it starts on boot and registers with slurmctld.
+slurm_compute_image_enable_slurmd: true
+
+# Remove the identity and state a snapshot must not carry into every clone:
+# machine-id (DHCP/DUID and journal identity), SSH host keys, cloud-init
+# state, logs, apt lists and the slurmd spool.
+slurm_compute_image_cleanup: true
+slurm_compute_image_cleanup_paths:
+  - /var/lib/slurm/slurmd
+  - /var/log/slurm
+  - /var/lib/cloud/instances
+  - /var/lib/cloud/instance

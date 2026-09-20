@@ -248,6 +248,38 @@ Lua auto-add plugin, systemd drop-ins.
   program fails cleanly with an unreachable endpoint (error in both logs,
   exit 1), and a second run is `changed=0`. **Not yet tested against a real
   OpenStack cloud** - that needs the courses repo's dev deployment.
+- **Compute-node image** (`slurm_compute_image` role +
+  `playbooks/build_compute_image.yml`, done 2026-09-20). Boot a VM from a base
+  image, configure it, clean it, snapshot it; the builder is deleted in an
+  `always` block. The role does the Slurm side only (slurmd + `--conf-server`,
+  munge key, slurmd enabled); site-specific roles come from
+  `compute_image_extra_roles`, and `tasks_from: cleanup` runs last, which is
+  why the cleanup is NOT imported from the role's main.yml.
+  The munge key is **baked into the image** (the user's choice): the image is
+  forced private and the playbook refuses to overwrite an existing name.
+  Glance "private" is project-wide, not per user - said so in the README.
+  `boot_from_volume: false` matters: only an image-backed server snapshots
+  into a plain Glance image (the courses repo's VMs are volume-backed).
+  Verified in a container: slurmd enabled, conf-server set, munge key byte
+  identical and 0400 munge:munge, no /etc/slurm/slurm.conf, machine-id
+  emptied, host keys and slurmd spool gone, logs and journal cleared. The
+  OpenStack orchestration (boot/snapshot/delete) is **untested** - it needs a
+  real cloud.
+  **Known consequence (accepted 2026-09-20, option "leave it"):** the image
+  carries no SSH host keys, so every created node generates its own on first
+  boot and a re-created node presents a NEW host key under the same name/IP -
+  users with it in known_hosts get a mismatch warning. Baking host keys into
+  the image would fix that but lets anyone who can boot the image impersonate
+  a node. The courses repo already gives its users `StrictHostKeyChecking no`
+  (configure.yml writes ~/.ssh/config) and Ansible connects with the same, so
+  nothing breaks today. If stable identities are ever needed: inject a
+  per-node key via cloud-init user-data from the resume program (metadata
+  exposure), or use SSH host certificates signed by a cluster CA (preferred
+  for anything long-lived).
+  Two Ansible traps found here: `delegate_to` is resolved even for a task
+  whose `when` is false, and even inside a block with that `when`, so a
+  possibly-empty delegate host needs a ternary fallback; and `cloud-init
+  clean` must be guarded by a stat (containers have no cloud-init).
 - `ansible-galaxy collection install` has **no `-q` flag**: passing it fails
   the install silently in a pipeline and leaves a stale collection installed
   (cost an hour of confusing test results).
@@ -359,8 +391,8 @@ simply run `tests/install/run-tests.sh` inside it (mount the repo at
   end_host`). Next, in order: configless mode
   (DONE 2026-09-20: `slurm_install_configless`, `sackd` on submit hosts),
   OpenStack elastic scheduling (DONE 2026-09-20:
-  `slurm_install_cloud_scheduling`), an aux script to build compute-node
-  images,
+  `slurm_install_cloud_scheduling`), compute-node images (DONE 2026-09-20:
+  `slurm_compute_image` + `playbooks/build_compute_image.yml`),
   building `.deb`s from source, custom apt repos. The design decisions for
   configless + elastic nodes (agreed 2026-09-18: delete/create VMs, plain
   OpenStack DNS with no `/etc/hosts` and no pinned ports, pre-built compute

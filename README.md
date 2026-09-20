@@ -301,6 +301,57 @@ the host has none — no distro python packages are involved, so the same
 recipe works on other distros. Point
 `slurm_install_cloud_python_interpreter` at another interpreter to skip that.
 
+#### The compute-node image
+
+A created node must boot ready to run jobs: slurmd, the munge key and
+whatever the site needs (users, shared filesystems, software).
+`playbooks/build_compute_image.yml` builds that image by booting a VM from a
+base image, configuring it, cleaning it and snapshotting it to Glance:
+
+```sh
+ansible-playbook pescobar.slurm.build_compute_image -e @image-vars.yml
+```
+
+```yaml
+# image-vars.yml
+compute_image_name: my-compute-image-2026-09-20
+compute_image_base: "Ubuntu 26.04"
+compute_image_flavor: c002r004
+compute_image_network: my-network
+compute_image_keypair: my-keypair
+slurm_compute_image_conf_server: slurm-master:6817
+slurm_compute_image_munge_key_host: slurm-master   # or _munge_key_file
+compute_image_extra_roles: [my.users, my.nfs_client, my.cvmfs]  # optional
+```
+
+The `slurm_compute_image` role does the Slurm side (slurmd in configless
+mode, the munge key, slurmd enabled for boot) and, from its `cleanup` task
+file, strips what must not be cloned: machine-id, SSH host keys, cloud-init
+state, the journal, logs and the slurmd spool. Your own roles run in between,
+via `compute_image_extra_roles`. The builder VM is deleted even if the build
+fails.
+
+**Known consequence: compute nodes change SSH host keys.** The image ships
+without host keys (sharing one identity across every node would let anyone
+who can boot the image impersonate a node), so cloud-init generates a fresh
+set on each VM's first boot. A node deleted and re-created by the suspend and
+resume cycle therefore comes back with a different host key under the same
+name and address, and anyone with it in `known_hosts` gets the usual
+mismatch warning. Give the users a `StrictHostKeyChecking no` (and
+`UserKnownHostsFile /dev/null`) stanza for the compute nodes, which is what
+an elastic cluster normally does. If you need stable identities, either have
+your resume program inject a per-node key through cloud-init user-data (it
+then sits in the instance metadata), or sign each node's freshly generated
+key with an SSH certificate authority the clients trust, which needs no
+per-node state.
+
+The image is created **private**, and the playbook enforces that: it contains
+the cluster's munge key, so anyone able to boot it can authenticate to the
+cluster. Note that Glance's "private" means the owning **project**, not one
+user; use a separate project or explicit image members if you need less than
+that. Building an image needs the `openstack.cloud` collection and an
+openstacksdk on the control host.
+
 The programs log every event at INFO to
 `/var/log/slurm/dynamic_nodes.log` (rotated weekly) and repeat warnings and
 errors to syslog; Slurm does not capture their output itself. A node whose
@@ -390,6 +441,5 @@ ansible-playbook -i imported_inventory/hosts.yml site.yml --check --diff
 
 ## Roadmap
 
-- `slurm_install`: CI deployment test on an Ubuntu 26.04 runner VM, a
-  script to build compute-node images, building Slurm `.deb` packages from
-  source, and custom apt repositories.
+- `slurm_install`: CI deployment test on an Ubuntu 26.04 runner VM,
+  building Slurm `.deb` packages from source, and custom apt repositories.

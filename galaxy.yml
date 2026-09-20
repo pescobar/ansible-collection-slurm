@@ -12,6 +12,8 @@ description: >-
   functionality can live here too.
 dependencies:
   ansible.mariadb: ">=6.0.0"
+  # only playbooks/build_compute_image.yml needs it
+  openstack.cloud: ">=2.2.0"
 license:
   - MIT
 tags:

@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  author: Pablo Escobar Lopez
+  description: >-
+    Prepare a machine to become a Slurm compute-node image: slurmd in
+    configless mode, the munge key, and the cleanup a snapshot needs.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+  galaxy_tags:
+    - slurm
+    - hpc
+    - openstack
+dependencies: []

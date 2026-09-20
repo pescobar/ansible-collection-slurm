@@ -56,6 +56,11 @@ non-accounting Slurm functionality can live in the same collection.
   (``acceptance-install.yml``: idempotency, core/memory limits, accounting
   enforcement with ``slurm_acct``). Adds a dependency
   on ``ansible.mariadb`` and raises the minimum ansible-core to 2.16.
+- ``slurm_compute_image`` role and ``playbooks/build_compute_image.yml``:
+  build a compute-node image for the elastic nodes on OpenStack - boot a VM
+  from a base image, apply the Slurm side (slurmd in configless mode plus the
+  munge key) and your own roles, strip the machine identity and state, then
+  snapshot it to a **private** Glance image and delete the builder.
 - Sample playbook + fully worked sample inventory under ``playbooks/``.
 - Self-contained docker test stack (``tests/docker/``), 7-scenario live
   acceptance suite (``tests/acceptance/``), pytest unit suite for the pure
