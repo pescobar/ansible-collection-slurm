@@ -1,0 +1,107 @@
+---
+# Delete what the elastic nodes and the image build leave behind in
+# OpenStack. Neither is managed by your infrastructure tool: slurmctld
+# creates the compute nodes and the image build creates the image, so
+# `tofu destroy` (or the equivalent) does not remove them, and they keep
+# costing money and quota after the cluster is gone.
+#
+#   ansible-playbook pescobar.slurm.cleanup_cloud_resources --check  # preview
+#   ansible-playbook pescobar.slurm.cleanup_cloud_resources
+#
+# It deletes, by default:
+#   - servers named after the cloud nodes in slurm_install_cloud_nodes
+#     ('compute-[01-04]' matches compute-01 ... compute-99, and nothing else:
+#     the name must be the prefix followed by digits only)
+#   - a leftover image builder, '<compute_image_name>-builder'
+#
+# and, only when you ask for them:
+#   - images, with slurm_cleanup_images (a list of names). Deleting an image
+#     cannot be undone, so it is never automatic.
+#   - detached volumes, with slurm_cleanup_orphan_volumes=true. A node's own
+#     volume goes away with the node (delete_on_termination); anything else
+#     that is detached may well belong to something other than this cluster,
+#     so look at the preview first.
+#
+# Run it with the cluster's inventory, so the node names and the OpenStack
+# credentials are the ones that cluster used.
+
+- name: Delete leftover Slurm cloud resources
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _cloud: "{{ slurm_install_cloud_name | default('openstack') }}"
+    # A node group's name is a Slurm hostlist expression: the servers are
+    # named after the individual nodes, so match the prefix plus digits.
+    # 'compute-[01-04]' -> '^compute\-[0-9]+$'
+    _node_regexes: >-
+      {{ slurm_install_cloud_nodes | default([]) | map(attribute='name')
+         | map('regex_replace', '^([^\[]*)\[.*$', '\1[0-9]+')
+         | map('regex_replace', '^(.*)$', '^\1$') | list }}
+    _builder_regexes: >-
+      {{ ['^' ~ (compute_image_name | regex_escape) ~ '-builder$']
+         if compute_image_name is defined else [] }}
+    _name_regex: "{{ (_node_regexes + _builder_regexes) | join('|') }}"
+  tasks:
+    - name: Check there is something to match on
+      ansible.builtin.assert:
+        that: _name_regex | length > 0
+        fail_msg: >-
+          Nothing to look for: set slurm_install_cloud_nodes (normally from
+          the cluster's inventory) and/or compute_image_name.
+        quiet: true
+
+    - name: List the servers
+      openstack.cloud.server_info:
+        cloud: "{{ _cloud }}"
+      register: _cleanup_servers
+      check_mode: false
+
+    - name: Work out which servers to delete
+      ansible.builtin.set_fact:
+        _cleanup_targets: >-
+          {{ _cleanup_servers.servers | map(attribute='name')
+             | select('match', _name_regex) | list }}
+
+    - name: Report what this will delete
+      ansible.builtin.debug:
+        msg:
+          - "matching: {{ _name_regex }}"
+          - "servers: {{ _cleanup_targets | join(', ') | default('none', true) }}"
+          - "images: {{ slurm_cleanup_images | default([]) | join(', ') | default('none', true) }}"
+          - "detached volumes: {{ 'yes' if slurm_cleanup_orphan_volumes | default(false) | bool else 'no' }}"
+
+    - name: Delete the leftover servers
+      openstack.cloud.server:
+        cloud: "{{ _cloud }}"
+        name: "{{ item }}"
+        state: absent
+        wait: true
+        timeout: 600
+      loop: "{{ _cleanup_targets }}"
+
+    - name: Delete the compute node image(s)
+      openstack.cloud.image:
+        cloud: "{{ _cloud }}"
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ slurm_cleanup_images | default([]) }}"
+
+    - name: Find detached volumes
+      openstack.cloud.volume_info:
+        cloud: "{{ _cloud }}"
+      register: _cleanup_volumes
+      check_mode: false
+      when: slurm_cleanup_orphan_volumes | default(false) | bool
+
+    - name: Delete the detached volumes
+      openstack.cloud.volume:
+        cloud: "{{ _cloud }}"
+        name: "{{ item.id }}"
+        state: absent
+        wait: true
+        timeout: 600
+      loop: "{{ _cleanup_volumes.volumes | default([])
+                | selectattr('status', 'equalto', 'available') | list }}"
+      loop_control:
+        label: "{{ item.id }} ({{ item.name | default('unnamed') }})"
+      when: slurm_cleanup_orphan_volumes | default(false) | bool
