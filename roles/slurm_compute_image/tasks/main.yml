@@ -1,0 +1,87 @@
+---
+- name: Check the role variables
+  ansible.builtin.assert:
+    that:
+      - slurm_compute_image_conf_server | length > 0
+      - slurm_compute_image_munge_key_file | length > 0
+        or slurm_compute_image_munge_key_host | length > 0
+    fail_msg: >-
+      slurm_compute_image needs slurm_compute_image_conf_server (the
+      host[:port] the node fetches its config from) and the munge key, either
+      as slurm_compute_image_munge_key_file (a path on the control host) or
+      slurm_compute_image_munge_key_host (an inventory host to read
+      /etc/munge/munge.key from, normally the controller).
+    quiet: true
+
+- name: Install the compute node packages
+  ansible.builtin.apt:
+    name: "{{ slurm_compute_image_packages }}"
+    state: present
+    cache_valid_time: 3600
+
+# delegate_to is resolved before the conditional, even for a skipped task
+# (a 'when' on the block does not help), so an empty host would break the
+# play: fall back to this host, where the task is skipped anyway.
+- name: Install the munge key from the controller
+  when: slurm_compute_image_munge_key_host | length > 0
+  block:
+    - name: Read the munge key from the controller
+      ansible.builtin.slurp:
+        src: /etc/munge/munge.key
+      delegate_to: "{{ (slurm_compute_image_munge_key_host | length > 0)
+                       | ternary(slurm_compute_image_munge_key_host, inventory_hostname) }}"
+      register: _slurm_compute_image_munge_key
+      no_log: true
+
+    # The key is binary, so it goes in base64-decoded rather than as text.
+    - name: Write the munge key
+      ansible.builtin.copy:
+        content: "{{ _slurm_compute_image_munge_key.content | b64decode }}"
+        dest: /etc/munge/munge.key
+        owner: munge
+        group: munge
+        mode: "0400"
+      no_log: true
+
+- name: Install the munge key from a file
+  ansible.builtin.copy:
+    src: "{{ slurm_compute_image_munge_key_file }}"
+    dest: /etc/munge/munge.key
+    owner: munge
+    group: munge
+    mode: "0400"
+  when: slurm_compute_image_munge_key_file | length > 0
+  no_log: true
+
+# Configless: the node has no slurm.conf of its own and asks slurmctld at
+# boot. The Ubuntu unit reads this file (EnvironmentFile=-).
+- name: Point slurmd at the config server
+  ansible.builtin.copy:
+    content: |
+      # Ansible managed (pescobar.slurm, slurm_compute_image role)
+      SLURMD_OPTIONS="--conf-server {{ slurm_compute_image_conf_server }}"
+    dest: /etc/default/slurmd
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Remove any local Slurm config
+  ansible.builtin.file:
+    path: "/etc/slurm/{{ item }}"
+    state: absent
+  loop:
+    - slurm.conf
+    - cgroup.conf
+
+# Enabled, not started: it has nothing to talk to until the node is created
+# by slurmctld, and it must come up on every clone of this image.
+- name: Enable slurmd at boot
+  ansible.builtin.systemd_service:
+    name: slurmd
+    enabled: true
+  when: slurm_compute_image_enable_slurmd | bool
+
+# The cleanup (machine-id, host keys, cloud-init state, logs) is NOT run from
+# here: it must happen after the site-specific roles in the same play, so the
+# build playbook calls it last with
+#   include_role: {name: ..., tasks_from: cleanup}

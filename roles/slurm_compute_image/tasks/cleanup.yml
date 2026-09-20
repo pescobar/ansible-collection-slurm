@@ -1,0 +1,78 @@
+---
+# Strip the builder's identity and state so every VM cloned from the image
+# comes up as a fresh machine. Run this last, after the site-specific roles.
+
+- name: Stop the daemons that hold state
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - slurmd
+    - munge
+  failed_when: false
+
+- name: Look for cloud-init
+  ansible.builtin.stat:
+    path: /usr/bin/cloud-init
+  register: _slurm_compute_image_cloud_init
+
+# Without this the clones keep the builder's instance id and skip the
+# per-instance modules (host keys, hostname) on first boot.
+- name: Let cloud-init run again on first boot
+  ansible.builtin.command:
+    cmd: cloud-init clean --logs --seed
+  changed_when: true
+  when: _slurm_compute_image_cloud_init.stat.exists
+
+- name: Remove state that must not be cloned
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ slurm_compute_image_cleanup_paths }}"
+
+# systemd regenerates it on boot; an empty (not missing) file also keeps
+# systemd from using a kernel-derived id, so every clone gets its own.
+- name: Truncate the machine id
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0444"
+  loop:
+    - /etc/machine-id
+    - /var/lib/dbus/machine-id
+
+- name: Find the SSH host keys
+  ansible.builtin.find:
+    paths: /etc/ssh
+    patterns: "ssh_host_*"
+  register: _slurm_compute_image_host_keys
+
+# Cloned host keys would make every node present the same identity.
+# cloud-init generates a new set on first boot.
+- name: Remove the SSH host keys
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _slurm_compute_image_host_keys.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Clear the apt cache
+  ansible.builtin.apt:
+    clean: true
+
+# The journal is keyed by machine-id and journald holds it open, so
+# truncating is pointless: drop the directories and let it start fresh.
+- name: Drop the journal
+  ansible.builtin.shell:
+    cmd: rm -rf /var/log/journal/*
+  changed_when: true
+
+- name: Truncate the logs and shell history
+  ansible.builtin.shell:
+    cmd: >-
+      find /var/log -type f -exec truncate --size=0 {} + ;
+      rm -f /root/.bash_history /home/*/.bash_history
+  changed_when: true

@@ -1,0 +1,163 @@
+---
+# Build a Slurm compute-node image on OpenStack: boot a VM from a base image,
+# configure it, clean it and snapshot it to Glance.
+#
+#   ansible-playbook pescobar.slurm.build_compute_image \
+#     -e @image-vars.yml
+#
+# Required variables (see roles/slurm_compute_image/defaults/main.yml for the
+# node-side ones):
+#   compute_image_name          name of the image to create
+#   compute_image_base          base image the builder boots from
+#   compute_image_flavor        flavor for the builder
+#   compute_image_network       network the builder joins
+#   compute_image_keypair       keypair Ansible uses to reach the builder
+#   slurm_compute_image_conf_server        <controller>:6817
+#   slurm_compute_image_munge_key_host     inventory host holding the key
+#     (or slurm_compute_image_munge_key_file, a path on the control host)
+#
+# Site-specific configuration (users, shared filesystems, software) goes in
+# compute_image_extra_roles, applied to the builder before the cleanup:
+#   compute_image_extra_roles: [my.users, my.nfs_client, my.cvmfs]
+#
+# The builder is reached over SSH as compute_image_ssh_user. It joins the
+# group '_compute_image_builder', so connection settings (a jump host, a
+# different key) go in group_vars/_compute_image_builder/ or on the command
+# line, e.g. -e ansible_ssh_private_key_file=~/.ssh/id_ed25519_tofu
+#
+# The resulting image is private (project-scoped): it holds the cluster's
+# munge key, so anyone who can boot it can authenticate to the cluster.
+
+- name: Create the builder VM
+  hosts: localhost
+  gather_facts: false
+  vars:
+    compute_image_builder_name: "{{ compute_image_name }}-builder"
+    compute_image_cloud: "{{ slurm_install_cloud_name | default('openstack') }}"
+    compute_image_security_groups: []
+    compute_image_ssh_user: ubuntu
+  tasks:
+    - name: Check the build variables
+      ansible.builtin.assert:
+        that:
+          - compute_image_name | default('') | length > 0
+          - compute_image_base | default('') | length > 0
+          - compute_image_flavor | default('') | length > 0
+          - compute_image_network | default('') | length > 0
+          - compute_image_keypair | default('') | length > 0
+        fail_msg: >-
+          Set compute_image_name, compute_image_base, compute_image_flavor,
+          compute_image_network and compute_image_keypair.
+        quiet: true
+
+    - name: Refuse to overwrite an existing image
+      openstack.cloud.image_info:
+        cloud: "{{ compute_image_cloud }}"
+        image: "{{ compute_image_name }}"
+      register: _compute_image_existing
+
+    - name: Fail when the image already exists
+      ansible.builtin.fail:
+        msg: >-
+          Image '{{ compute_image_name }}' already exists. Delete it, or pick
+          another name (images are usually versioned, e.g. name-2026-09-20).
+      when: _compute_image_existing.images | length > 0
+
+    - name: Boot the builder VM
+      openstack.cloud.server:
+        cloud: "{{ compute_image_cloud }}"
+        name: "{{ compute_image_builder_name }}"
+        image: "{{ compute_image_base }}"
+        flavor: "{{ compute_image_flavor }}"
+        network: "{{ compute_image_network }}"
+        key_name: "{{ compute_image_keypair }}"
+        security_groups: "{{ compute_image_security_groups }}"
+        auto_ip: false
+        # Boot from the image itself, not a volume: only an image-backed
+        # server snapshots into a plain Glance image.
+        boot_from_volume: false
+        wait: true
+        timeout: 600
+      register: _compute_image_builder
+
+    - name: Add the builder to the inventory
+      ansible.builtin.add_host:
+        name: "{{ compute_image_builder_name }}"
+        groups: _compute_image_builder
+        ansible_host: "{{ _compute_image_builder.server.access_ipv4 or
+                          _compute_image_builder.server.private_v4 }}"
+        ansible_user: "{{ compute_image_ssh_user }}"
+        compute_image_server_id: "{{ _compute_image_builder.server.id }}"
+        compute_image_cloud: "{{ compute_image_cloud }}"
+        compute_image_name: "{{ compute_image_name }}"
+      changed_when: false
+
+- name: Configure the compute node image, snapshot it and delete it
+  hosts: _compute_image_builder
+  gather_facts: false
+  become: true
+  vars:
+    compute_image_extra_roles: []
+  tasks:
+    # The builder is deleted in the always block: a leaked VM costs money.
+    - name: Build the image
+      block:
+        - name: Wait for SSH
+          ansible.builtin.wait_for_connection:
+            timeout: 600
+            sleep: 5
+
+        - name: Gather facts
+          ansible.builtin.setup:
+
+        - name: Apply the Slurm compute node configuration
+          ansible.builtin.include_role:
+            name: pescobar.slurm.slurm_compute_image
+
+        - name: Apply the site-specific roles
+          ansible.builtin.include_role:
+            name: "{{ item }}"
+          loop: "{{ compute_image_extra_roles }}"
+
+        - name: Clean the image
+          ansible.builtin.include_role:
+            name: pescobar.slurm.slurm_compute_image
+            tasks_from: cleanup
+          when: slurm_compute_image_cleanup | default(true) | bool
+
+        - name: Stop the builder so the snapshot is consistent
+          openstack.cloud.server_action:
+            cloud: "{{ compute_image_cloud }}"
+            server: "{{ compute_image_server_id }}"
+            action: stop
+            timeout: 600
+          delegate_to: localhost
+          become: false
+
+        - name: Create the image from the builder
+          ansible.builtin.script:
+            cmd: >-
+              {{ playbook_dir }}/../roles/slurm_compute_image/files/snapshot_server.py
+              --cloud={{ compute_image_cloud }}
+              --server={{ compute_image_server_id }}
+              --name={{ compute_image_name }}
+            executable: "{{ ansible_playbook_python }}"
+          delegate_to: localhost
+          become: false
+          register: _compute_image_snapshot
+          changed_when: true
+
+        - name: Report the new image
+          ansible.builtin.debug:
+            msg: "{{ _compute_image_snapshot.stdout_lines }}"
+
+      always:
+        - name: Delete the builder VM
+          openstack.cloud.server:
+            cloud: "{{ compute_image_cloud }}"
+            name: "{{ inventory_hostname }}"
+            state: absent
+            wait: true
+            timeout: 600
+          delegate_to: localhost
+          become: false
