@@ -331,6 +331,20 @@ state, the journal, logs and the slurmd spool. Your own roles run in between,
 via `compute_image_extra_roles`. The builder VM is deleted even if the build
 fails.
 
+**Known consequence: compute nodes change SSH host keys.** The image ships
+without host keys (sharing one identity across every node would let anyone
+who can boot the image impersonate a node), so cloud-init generates a fresh
+set on each VM's first boot. A node deleted and re-created by the suspend and
+resume cycle therefore comes back with a different host key under the same
+name and address, and anyone with it in `known_hosts` gets the usual
+mismatch warning. Give the users a `StrictHostKeyChecking no` (and
+`UserKnownHostsFile /dev/null`) stanza for the compute nodes, which is what
+an elastic cluster normally does. If you need stable identities, either have
+your resume program inject a per-node key through cloud-init user-data (it
+then sits in the instance metadata), or sign each node's freshly generated
+key with an SSH certificate authority the clients trust, which needs no
+per-node state.
+
 The image is created **private**, and the playbook enforces that: it contains
 the cluster's munge key, so anyone able to boot it can authenticate to the
 cluster. Note that Glance's "private" means the owning **project**, not one

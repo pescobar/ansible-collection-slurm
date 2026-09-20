@@ -265,6 +265,17 @@ Lua auto-add plugin, systemd drop-ins.
   emptied, host keys and slurmd spool gone, logs and journal cleared. The
   OpenStack orchestration (boot/snapshot/delete) is **untested** - it needs a
   real cloud.
+  **Known consequence (accepted 2026-09-20, option "leave it"):** the image
+  carries no SSH host keys, so every created node generates its own on first
+  boot and a re-created node presents a NEW host key under the same name/IP -
+  users with it in known_hosts get a mismatch warning. Baking host keys into
+  the image would fix that but lets anyone who can boot the image impersonate
+  a node. The courses repo already gives its users `StrictHostKeyChecking no`
+  (configure.yml writes ~/.ssh/config) and Ansible connects with the same, so
+  nothing breaks today. If stable identities are ever needed: inject a
+  per-node key via cloud-init user-data from the resume program (metadata
+  exposure), or use SSH host certificates signed by a cluster CA (preferred
+  for anything long-lived).
   Two Ansible traps found here: `delegate_to` is resolved even for a task
   whose `when` is false, and even inside a block with that `when`, so a
   possibly-empty delegate host needs a ternary fallback; and `cloud-init
