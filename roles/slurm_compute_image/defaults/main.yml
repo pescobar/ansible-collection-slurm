@@ -8,10 +8,16 @@
 # node has no local slurm.conf: slurmd asks slurmctld for it.
 slurm_compute_image_conf_server: "{{ slurm_install_conf_server | default('') }}"
 
-# Packages the image needs to act as a compute node.
+# Packages the image needs to act as a compute node. slurm-client brings the
+# user commands (squeue, sinfo, scontrol, srun, sbatch): a job running on the
+# node - an Open OnDemand desktop session, say - is where a user submits from
+# next. They read the config slurmd caches under /run/slurm/conf, so no
+# /etc/slurm/slurm.conf is needed. A static cluster's workers get the same
+# package from slurm_install_packages_common.
 slurm_compute_image_packages:
   - slurmd
   - munge
+  - slurm-client
 
 # The munge key baked into the image. Either point at a file on the control
 # host, or name an inventory host to read /etc/munge/munge.key from (normally

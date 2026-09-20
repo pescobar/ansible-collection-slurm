@@ -57,6 +57,8 @@ non-accounting Slurm functionality can live in the same collection.
   enforcement with ``slurm_acct``). Adds a dependency
   on ``ansible.mariadb`` and raises the minimum ansible-core to 2.16.
 - ``slurm_compute_image`` role and ``playbooks/build_compute_image.yml``:
+  the image carries the Slurm client commands, so a job running on the node
+  (an Open OnDemand desktop session, for instance) can submit further jobs;
   build a compute-node image for the elastic nodes on OpenStack - boot a VM
   from a base image, apply the Slurm side (slurmd in configless mode plus the
   munge key) and your own roles, strip the machine identity and state, then

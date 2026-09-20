@@ -415,7 +415,7 @@ compute_image_extra_roles: [my.users, my.nfs_client, my.cvmfs]  # optional
 ```
 
 The `slurm_compute_image` role does the Slurm side (slurmd in configless
-mode, the munge key, slurmd enabled for boot) and, from its `cleanup` task
+mode, the munge key, the client commands, slurmd enabled for boot) and, from its `cleanup` task
 file, strips what must not be cloned: machine-id, SSH host keys, cloud-init
 state, the journal, logs and the slurmd spool. Your own roles run in between,
 via `compute_image_extra_roles`. The builder VM is deleted even if the build
