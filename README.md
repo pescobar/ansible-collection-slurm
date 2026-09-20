@@ -435,6 +435,15 @@ then sits in the instance metadata), or sign each node's freshly generated
 key with an SSH certificate authority the clients trust, which needs no
 per-node state.
 
+**Authenticating**: the playbook talks to OpenStack from the control host.
+By default it passes no cloud name, so openstacksdk uses the `OS_*`
+environment — source an openrc file, or `export OS_CLOUD=<entry>` for a
+clouds.yaml entry. Set `compute_image_cloud` to name a clouds.yaml entry
+explicitly. (`slurm_install_cloud_name` is a different thing: the entry in
+the `clouds.yaml` the role writes **on the controller**, for the
+resume/suspend programs.) `cleanup_cloud_resources.yml` reads
+`compute_image_cloud` the same way.
+
 `compute_image_enabled: false` makes the playbook do nothing at all, so a
 deploy playbook can import it unconditionally and a static cluster (no cloud
 nodes, no image needed) skips it.

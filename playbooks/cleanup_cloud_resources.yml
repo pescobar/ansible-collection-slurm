@@ -29,7 +29,9 @@
   hosts: localhost
   gather_facts: false
   vars:
-    _cloud: "{{ slurm_install_cloud_name | default('openstack') }}"
+    # Empty: authenticate from the OS_* environment (an openrc file). Set
+    # compute_image_cloud for a clouds.yaml entry instead.
+    _cloud: "{{ compute_image_cloud | default('') }}"
     # A node group's name is a Slurm hostlist expression: the servers are
     # named after the individual nodes, so match the prefix plus digits.
     # 'compute-[01-04]' -> '^compute\-[0-9]+$'
@@ -52,7 +54,7 @@
 
     - name: List the servers
       openstack.cloud.server_info:
-        cloud: "{{ _cloud }}"
+        cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
       register: _cleanup_servers
       check_mode: false
 
@@ -72,7 +74,7 @@
 
     - name: Delete the leftover servers
       openstack.cloud.server:
-        cloud: "{{ _cloud }}"
+        cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
         name: "{{ item }}"
         state: absent
         wait: true
@@ -81,21 +83,21 @@
 
     - name: Delete the compute node image(s)
       openstack.cloud.image:
-        cloud: "{{ _cloud }}"
+        cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
         name: "{{ item }}"
         state: absent
       loop: "{{ slurm_cleanup_images | default([]) }}"
 
     - name: Find detached volumes
       openstack.cloud.volume_info:
-        cloud: "{{ _cloud }}"
+        cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
       register: _cleanup_volumes
       check_mode: false
       when: slurm_cleanup_orphan_volumes | default(false) | bool
 
     - name: Delete the detached volumes
       openstack.cloud.volume:
-        cloud: "{{ _cloud }}"
+        cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
         name: "{{ item.id }}"
         state: absent
         wait: true
