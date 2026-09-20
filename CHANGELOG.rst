@@ -46,7 +46,13 @@ non-accounting Slurm functionality can live in the same collection.
   (``slurm_install_configless``: only the controller holds ``slurm.conf``,
   workers and submit hosts fetch it from slurmctld over ``--conf-server``,
   ``sackd`` is installed on the submit hosts, and config changes are pushed
-  with ``scontrol reconfigure``). Tested by a full deployment on an Ubuntu 26.04 runner VM
+  with ``scontrol reconfigure``), and optional `elastic OpenStack compute
+  nodes <https://slurm.schedmd.com/elastic_computing.html>`_
+  (``slurm_install_cloud_scheduling``: ``State=CLOUD`` nodes whose VM settings
+  ride on the node Features, a resume/suspend program using the OpenStack sdk
+  from a uv-built venv, credentials in ``/etc/openstack/clouds.yaml``, and
+  logging to ``/var/log/slurm/dynamic_nodes.log`` plus syslog for warnings
+  and errors). Tested by a full deployment on an Ubuntu 26.04 runner VM
   (``acceptance-install.yml``: idempotency, core/memory limits, accounting
   enforcement with ``slurm_acct``). Adds a dependency
   on ``ansible.mariadb`` and raises the minimum ansible-core to 2.16.

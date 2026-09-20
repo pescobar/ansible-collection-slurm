@@ -1,0 +1,122 @@
+---
+# Elastic OpenStack compute nodes: everything here runs on the controller,
+# which is where slurmctld executes ResumeProgram/SuspendProgram as SlurmUser.
+
+- name: Check the cloud scheduling variables
+  ansible.builtin.assert:
+    that:
+      - slurm_install_configless | bool
+      - slurm_install_cloud_nodes | length > 0
+      - not slurm_install_cloud_manage_clouds_yaml | bool
+        or (slurm_install_cloud_auth_url | length > 0
+            and slurm_install_cloud_application_credential_id | length > 0
+            and slurm_install_cloud_application_credential_secret | length > 0)
+    fail_msg: >-
+      Cloud scheduling needs slurm_install_configless (the created nodes have
+      no local slurm.conf), at least one entry in slurm_install_cloud_nodes,
+      and - unless slurm_install_cloud_manage_clouds_yaml is false - the
+      OpenStack auth_url and application credential.
+    quiet: true
+
+- name: Install uv
+  when: slurm_install_cloud_uv_install | bool
+  block:
+    - name: Check for uv
+      ansible.builtin.stat:
+        path: "{{ slurm_install_cloud_uv_path }}"
+      register: _slurm_install_uv
+
+    - name: Download and unpack uv
+      ansible.builtin.unarchive:
+        src: "{{ slurm_install_cloud_uv_url }}"
+        remote_src: true
+        dest: /usr/local/bin
+        # the tarball has a top-level directory; take the binary out of it
+        extra_opts:
+          - --strip-components=1
+          - --wildcards
+          - "*/uv"
+        owner: root
+        group: root
+        mode: "0755"
+      when: not _slurm_install_uv.stat.exists
+
+- name: Create the venv for the OpenStack sdk
+  ansible.builtin.command:
+    cmd: "{{ slurm_install_cloud_uv_path }} venv --python 3 {{ slurm_install_cloud_venv_path }}"
+    creates: "{{ slurm_install_cloud_venv_path }}/bin/python3"
+
+# uv reports what it did, so the task is only 'changed' when it installed.
+- name: Install the OpenStack sdk in the venv
+  ansible.builtin.command:
+    cmd: "{{ slurm_install_cloud_uv_path }} pip install --python {{ slurm_install_cloud_venv_path }}/bin/python3 {{ slurm_install_cloud_openstacksdk }}"
+  register: _slurm_install_sdk
+  changed_when: "'Installed' in _slurm_install_sdk.stderr"
+
+- name: Deploy the resume/suspend program
+  ansible.builtin.template:
+    src: slurm_openstack_nodes.py.j2
+    dest: "{{ slurm_install_cloud_program_dir }}/slurm_openstack_nodes.py"
+    owner: root
+    group: root
+    mode: "0755"
+
+# The program picks resume or suspend from the name it is called as, so
+# slurm.conf can name a plain path with no arguments.
+- name: Link the resume and suspend programs
+  ansible.builtin.file:
+    src: "{{ slurm_install_cloud_program_dir }}/slurm_openstack_nodes.py"
+    dest: "{{ slurm_install_cloud_program_dir }}/slurm_openstack_{{ item }}"
+    state: link
+  loop:
+    - resume
+    - suspend
+
+- name: Create the log file
+  ansible.builtin.file:
+    path: "{{ slurm_install_cloud_log_file }}"
+    state: touch
+    owner: slurm
+    group: slurm
+    mode: "0640"
+    access_time: preserve
+    modification_time: preserve
+
+- name: Deploy the logrotate config
+  ansible.builtin.copy:
+    content: |
+      # Ansible managed (pescobar.slurm, slurm_install role)
+      {{ slurm_install_cloud_log_file }} {
+          weekly
+          rotate 8
+          missingok
+          notifempty
+          compress
+          delaycompress
+          create 0640 slurm slurm
+      }
+    dest: /etc/logrotate.d/slurm-dynamic-nodes
+    owner: root
+    group: root
+    mode: "0644"
+  when: slurm_install_cloud_logrotate | bool
+
+- name: Deploy the OpenStack credentials
+  when: slurm_install_cloud_manage_clouds_yaml | bool
+  block:
+    - name: Create /etc/openstack
+      ansible.builtin.file:
+        path: /etc/openstack
+        state: directory
+        owner: root
+        group: slurm
+        mode: "0750"
+
+    - name: Deploy /etc/openstack/clouds.yaml
+      ansible.builtin.template:
+        src: clouds.yaml.j2
+        dest: /etc/openstack/clouds.yaml
+        owner: slurm
+        group: slurm
+        mode: "0600"
+      no_log: true

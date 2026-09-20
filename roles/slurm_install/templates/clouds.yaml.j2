@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+# Credentials for the Slurm resume/suspend programs (SlurmUser only).
+clouds:
+  {{ slurm_install_cloud_name }}:
+    auth:
+      auth_url: {{ slurm_install_cloud_auth_url }}
+      application_credential_id: "{{ slurm_install_cloud_application_credential_id }}"
+      application_credential_secret: "{{ slurm_install_cloud_application_credential_secret }}"
+    auth_type: v3applicationcredential
+    identity_api_version: 3
+{% if slurm_install_cloud_region_name | length > 0 %}
+    region_name: "{{ slurm_install_cloud_region_name }}"
+{% endif %}
+    interface: "{{ slurm_install_cloud_interface }}"

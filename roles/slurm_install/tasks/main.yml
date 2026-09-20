@@ -64,6 +64,12 @@
   ansible.builtin.include_tasks: slurmdbd.yml
   when: _slurm_install_is_dbd
 
+- name: Configure the elastic OpenStack nodes
+  ansible.builtin.include_tasks: cloud.yml
+  when:
+    - slurm_install_cloud_scheduling | bool
+    - _slurm_install_is_controller
+
 - name: Configure slurmctld
   ansible.builtin.include_tasks: slurmctld.yml
   when: _slurm_install_is_controller

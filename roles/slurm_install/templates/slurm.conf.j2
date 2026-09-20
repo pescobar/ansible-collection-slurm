@@ -7,6 +7,7 @@ SlurmctldHost={{ slurm_install_controller_host }}
 AuthType=auth/munge
 SlurmUser=slurm
 {% set _ctld_params = (['enable_configless'] if slurm_install_configless else [])
+                      + (['idle_on_node_suspend'] if slurm_install_cloud_scheduling else [])
                       + slurm_install_slurmctld_parameters %}
 {% if _ctld_params | length > 0 %}
 SlurmctldParameters={{ _ctld_params | unique | join(',') }}
@@ -66,13 +67,48 @@ AccountingStorageHost={{ slurm_install_dbd_host }}
 AccountingStoragePort=6819
 AccountingStorageEnforce=associations,limits,qos
 
+{% if slurm_install_cloud_scheduling %}
+
+# Elastic nodes (https://slurm.schedmd.com/elastic_computing.html): the
+# programs below create and delete the VMs. A cloud node's address is looked
+# up in DNS on every connection (NoAddrCache), because a re-created node gets
+# a new IP; PrivateData=cloud keeps powered-down nodes visible in sinfo.
+ResumeProgram={{ slurm_install_cloud_program_dir }}/slurm_openstack_resume
+SuspendProgram={{ slurm_install_cloud_program_dir }}/slurm_openstack_suspend
+SuspendTime={{ slurm_install_cloud_suspend_time }}
+ResumeTimeout={{ slurm_install_cloud_resume_timeout }}
+SuspendTimeout={{ slurm_install_cloud_suspend_timeout }}
+ResumeRate={{ slurm_install_cloud_resume_rate }}
+SuspendRate={{ slurm_install_cloud_suspend_rate }}
+CommunicationParameters=NoAddrCache
+PrivateData=cloud
+{% if slurm_install_cloud_suspend_exc_nodes | length > 0 %}
+SuspendExcNodes={{ slurm_install_cloud_suspend_exc_nodes }}
+{% endif %}
+{% if slurm_install_cloud_suspend_exc_parts | length > 0 %}
+SuspendExcParts={{ slurm_install_cloud_suspend_exc_parts }}
+{% endif %}
+{% endif %}
+
 # Nodes and partitions
 {% for node in groups[slurm_install_workers_group] | default([]) %}
 {%   set facts = hostvars[node]['ansible_facts'] %}
 NodeName={{ node }} Sockets={{ facts['processor_count'] }} CoresPerSocket={{ facts['processor_cores'] }} ThreadsPerCore={{ facts['processor_threads_per_core'] }} RealMemory={{ facts['memtotal_mb'] - slurm_install_node_memory_reserve_mb | int }} State=UNKNOWN
 {% endfor %}
-{% if groups[slurm_install_workers_group] | default([]) | length > 0 %}
-PartitionName={{ slurm_install_partition_name }} Nodes={{ groups[slurm_install_workers_group] | join(',') }} Default=YES MaxTime=INFINITE State=UP
+{% for group in (slurm_install_cloud_nodes if slurm_install_cloud_scheduling else []) %}
+NodeName={{ group.name }} State=CLOUD CPUs={{ group.cpus }} RealMemory={{ group.real_memory }}{% if group.sockets is defined %} Sockets={{ group.sockets }}{% endif %}{% if group.cores_per_socket is defined %} CoresPerSocket={{ group.cores_per_socket }}{% endif %}{% if group.threads_per_core is defined %} ThreadsPerCore={{ group.threads_per_core }}{% endif %} Features=image={{ group.image }},flavor={{ group.flavor }},network={{ group.network }},keypair={{ group.keypair }},security_groups={{ group.security_groups | join('|') }}{% if group.extra is defined %} {{ group.extra }}{% endif %}
+
+{% endfor %}
+{% set _cloud_node_names = (slurm_install_cloud_nodes | map(attribute='name') | list
+                            if slurm_install_cloud_scheduling else []) %}
+{% set _same_partition = slurm_install_cloud_partition_name == slurm_install_partition_name %}
+{% set _partition_nodes = (groups[slurm_install_workers_group] | default([]))
+                          + (_cloud_node_names if _same_partition else []) %}
+{% if _partition_nodes | length > 0 %}
+PartitionName={{ slurm_install_partition_name }} Nodes={{ _partition_nodes | join(',') }} Default=YES MaxTime=INFINITE State=UP
+{% endif %}
+{% if _cloud_node_names | length > 0 and not _same_partition %}
+PartitionName={{ slurm_install_cloud_partition_name }} Nodes={{ _cloud_node_names | join(',') }} Default={{ 'NO' if _partition_nodes | length > 0 else 'YES' }} MaxTime=INFINITE State=UP
 {% endif %}
 {% if slurm_install_slurm_conf_extra | length > 0 %}
 
