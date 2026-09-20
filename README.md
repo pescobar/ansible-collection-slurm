@@ -435,6 +435,10 @@ then sits in the instance metadata), or sign each node's freshly generated
 key with an SSH certificate authority the clients trust, which needs no
 per-node state.
 
+`compute_image_enabled: false` makes the playbook do nothing at all, so a
+deploy playbook can import it unconditionally and a static cluster (no cloud
+nodes, no image needed) skips it.
+
 `compute_image_when_exists` decides what an existing image of that name
 means: `fail` (the default, so a build never replaces one silently), `skip`
 (build nothing, which lets a deploy playbook call the build every time and
