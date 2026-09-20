@@ -317,7 +317,9 @@ srun -N1 hostname
 ```
 
 `/var/log/slurm/dynamic_nodes.log` on the controller records every create and
-delete; warnings and errors also go to syslog.
+delete; warnings and errors also go to syslog. A node is usable once the VM has booted and
+slurmd has registered - about two minutes on SWITCH's OpenStack - so keep
+`ResumeTimeout` comfortably above that.
 
 The two shapes mix: keep a `slurm_workers` group *and* declare cloud nodes to
 get permanent workers plus burst capacity, and use
