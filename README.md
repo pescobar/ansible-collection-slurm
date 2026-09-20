@@ -243,13 +243,18 @@ sockets, cores, threads and memory). What the role does:
   database and user, and slurmdbd; slurmctld registers the cluster itself;
 - deploys `slurm.conf` (cons_tres, cgroup v2 task/proctrack plugins,
   accounting enforcement, one partition with all workers) and `cgroup.conf`
-  (memory and core limits) to the workers.
+  (memory and core limits) to the workers — or, with
+  `slurm_install_configless: true`, to the controller only, for slurmctld to
+  serve to the rest of the cluster.
 
 Options (see `roles/slurm_install/defaults/main.yml` for all variables):
 
 | Variable | Effect |
 |---|---|
 | `slurm_install_manage_etc_hosts` | add every cluster host to `/etc/hosts` |
+| `slurm_install_configless` | [configless mode](https://slurm.schedmd.com/configless_slurm.html): only the controller holds `slurm.conf`; workers (`slurmd`) and submit hosts (`sackd`) fetch it from slurmctld and cache it under `/run/slurm/conf`. The role adds `enable_configless` to `SlurmctldParameters`, writes `--conf-server` into `/etc/default/{slurmd,sackd}`, installs `sackd` on the submit hosts, removes the local `slurm.conf`/`cgroup.conf` from the non-controller hosts, and runs `scontrol reconfigure` when the config changes |
+| `slurm_install_conf_server` | `host[:port]` the workers and submit hosts fetch from (default: the controller on 6817) |
+| `slurm_install_slurmctld_parameters` | extra `SlurmctldParameters` (list), e.g. `['idle_on_node_suspend']` |
 | `slurm_install_slurm_conf_template` (and `_cgroup_conf_`, `_slurmdbd_conf_`) | use your own template |
 | `slurm_install_slurm_conf_extra` | extra lines appended to the built-in `slurm.conf` (e.g. `GresTypes=gpu`) |
 | `slurm_install_config_git_repo` | take `/etc/slurm` from a git repo instead (all files except `slurmdbd.conf`, which always comes from the template because it holds the DB password) |
@@ -342,6 +347,6 @@ ansible-playbook -i imported_inventory/hosts.yml site.yml --check --diff
 ## Roadmap
 
 - `slurm_install`: CI deployment test on an Ubuntu 26.04 runner VM,
-  configless mode (`sackd` on login nodes), OpenStack elastic scheduling, a
+  OpenStack elastic scheduling, a
   script to build compute-node images, building Slurm `.deb` packages from
   source, and custom apt repositories.
