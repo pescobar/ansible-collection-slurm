@@ -314,6 +314,13 @@ Lua auto-add plugin, systemd drop-ins.
   whose `when` is false, and even inside a block with that `when`, so a
   possibly-empty delegate host needs a ternary fallback; and `cloud-init
   clean` must be guarded by a stat (containers have no cloud-init).
+- **Cleanup** (`playbooks/cleanup_cloud_resources.yml`, 2026-09-20): cloud
+  nodes and images are invisible to tofu (slurmctld and the image build
+  create them), so a `tofu destroy` leaves them running - it happened on the
+  dev cluster, a leftover compute node stayed up after the destroy. Node
+  names are matched as prefix + digits, NOT a glob: `compute-*` would also
+  have matched an unrelated `compute-node-other` (caught while testing the
+  matcher, before it ever ran against the cloud).
 - `ansible-galaxy collection install` has **no `-q` flag**: passing it fails
   the install silently in a pipeline and leaves a stale collection installed
   (cost an hour of confusing test results).

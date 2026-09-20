@@ -61,6 +61,9 @@ non-accounting Slurm functionality can live in the same collection.
   from a base image, apply the Slurm side (slurmd in configless mode plus the
   munge key) and your own roles, strip the machine identity and state, then
   snapshot it to a **private** Glance image and delete the builder.
+- ``playbooks/cleanup_cloud_resources.yml``: delete the leftover cloud nodes,
+  image builders and (when named) images that no infrastructure tool manages,
+  since slurmctld and the image build create them.
 - Sample playbook + fully worked sample inventory under ``playbooks/``.
 - Self-contained docker test stack (``tests/docker/``), 7-scenario live
   acceptance suite (``tests/acceptance/``), pytest unit suite for the pure

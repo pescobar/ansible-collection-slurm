@@ -14,6 +14,9 @@
 #   compute_image_keypair       keypair Ansible uses to reach the builder
 #
 # Optional:
+#   compute_image_enabled       false builds nothing, so a deploy playbook can
+#                               import this unconditionally and a cluster with
+#                               no cloud nodes simply skips it
 #   compute_image_when_exists   what an existing image of that name means:
 #                               'fail' (default), 'skip' (build nothing) or
 #                               'replace' (delete it and build again)
@@ -51,6 +54,10 @@
     _ssh_user: "{{ compute_image_ssh_user | default('ubuntu') }}"
     _volume_size: "{{ compute_image_volume_size | default(0) | int }}"
   tasks:
+    - name: Stop here when image building is turned off
+      ansible.builtin.meta: end_play
+      when: not compute_image_enabled | default(true) | bool
+
     - name: Check the build variables
       ansible.builtin.assert:
         that:
