@@ -12,6 +12,17 @@
 #   compute_image_flavor        flavor for the builder
 #   compute_image_network       network the builder joins
 #   compute_image_keypair       keypair Ansible uses to reach the builder
+#
+# Optional:
+#   compute_image_when_exists   what an existing image of that name means:
+#                               'fail' (default), 'skip' (build nothing) or
+#                               'replace' (delete it and build again)
+#   compute_image_volume_size   GB; boot the builder from a volume and build
+#                               the image from that volume. Required on clouds
+#                               whose flavors have no local disk (disk=0),
+#                               where a server cannot boot from an image at
+#                               all. Without it the builder boots from the
+#                               image and is snapshotted in place.
 #   slurm_compute_image_conf_server        <controller>:6817
 #   slurm_compute_image_munge_key_host     inventory host holding the key
 #     (or slurm_compute_image_munge_key_file, a path on the control host)
@@ -31,11 +42,14 @@
 - name: Create the builder VM
   hosts: localhost
   gather_facts: false
+  # Defaults go through 'default()' rather than play vars: play vars would
+  # override the values set in the inventory, which is where these belong.
   vars:
-    compute_image_builder_name: "{{ compute_image_name }}-builder"
-    compute_image_cloud: "{{ slurm_install_cloud_name | default('openstack') }}"
-    compute_image_security_groups: []
-    compute_image_ssh_user: ubuntu
+    _builder_name: "{{ compute_image_builder_name | default(compute_image_name ~ '-builder') }}"
+    _cloud: "{{ compute_image_cloud | default(slurm_install_cloud_name | default('openstack')) }}"
+    _security_groups: "{{ compute_image_security_groups | default([]) }}"
+    _ssh_user: "{{ compute_image_ssh_user | default('ubuntu') }}"
+    _volume_size: "{{ compute_image_volume_size | default(0) | int }}"
   tasks:
     - name: Check the build variables
       ansible.builtin.assert:
@@ -50,57 +64,128 @@
           compute_image_network and compute_image_keypair.
         quiet: true
 
-    - name: Refuse to overwrite an existing image
+    - name: Look for an image of that name
       openstack.cloud.image_info:
-        cloud: "{{ compute_image_cloud }}"
+        cloud: "{{ _cloud }}"
         image: "{{ compute_image_name }}"
       register: _compute_image_existing
 
+    # compute_image_when_exists decides what an existing name means:
+    #   fail    (default) stop, so a build never replaces an image silently
+    #   skip    leave it alone and build nothing - lets a deploy playbook run
+    #           the build every time and only pay for it once
+    #   replace delete it and build again
     - name: Fail when the image already exists
       ansible.builtin.fail:
         msg: >-
-          Image '{{ compute_image_name }}' already exists. Delete it, or pick
-          another name (images are usually versioned, e.g. name-2026-09-20).
-      when: _compute_image_existing.images | length > 0
+          Image '{{ compute_image_name }}' already exists. Delete it, pick
+          another name, or set compute_image_when_exists to 'skip' or
+          'replace'.
+      when:
+        - _compute_image_existing.images | length > 0
+        - compute_image_when_exists | default('fail') == 'fail'
 
-    - name: Boot the builder VM
-      openstack.cloud.server:
-        cloud: "{{ compute_image_cloud }}"
-        name: "{{ compute_image_builder_name }}"
-        image: "{{ compute_image_base }}"
-        flavor: "{{ compute_image_flavor }}"
-        network: "{{ compute_image_network }}"
-        key_name: "{{ compute_image_keypair }}"
-        security_groups: "{{ compute_image_security_groups }}"
-        auto_ip: false
-        # Boot from the image itself, not a volume: only an image-backed
-        # server snapshots into a plain Glance image.
-        boot_from_volume: false
-        wait: true
-        timeout: 600
-      register: _compute_image_builder
+    - name: Delete the existing image
+      openstack.cloud.image:
+        cloud: "{{ _cloud }}"
+        name: "{{ compute_image_name }}"
+        state: absent
+      when:
+        - _compute_image_existing.images | length > 0
+        - compute_image_when_exists | default('fail') == 'replace'
 
-    - name: Add the builder to the inventory
-      ansible.builtin.add_host:
-        name: "{{ compute_image_builder_name }}"
-        groups: _compute_image_builder
-        ansible_host: "{{ _compute_image_builder.server.access_ipv4 or
-                          _compute_image_builder.server.private_v4 }}"
-        ansible_user: "{{ compute_image_ssh_user }}"
-        compute_image_server_id: "{{ _compute_image_builder.server.id }}"
-        compute_image_cloud: "{{ compute_image_cloud }}"
-        compute_image_name: "{{ compute_image_name }}"
-      changed_when: false
+    - name: Keep the existing image and stop here
+      ansible.builtin.meta: end_play
+      when:
+        - _compute_image_existing.images | length > 0
+        - compute_image_when_exists | default('fail') == 'skip'
+
+    # Anything failing after the VM exists must not leak it: the always
+    # block of the next play is not reached if this one fails.
+    - name: Boot the builder and put it in the inventory
+      block:
+
+        - name: Boot the builder VM
+          openstack.cloud.server:
+            cloud: "{{ _cloud }}"
+            name: "{{ _builder_name }}"
+            image: "{{ compute_image_base }}"
+            flavor: "{{ compute_image_flavor }}"
+            network: "{{ compute_image_network }}"
+            key_name: "{{ compute_image_keypair }}"
+            security_groups: "{{ _security_groups }}"
+            auto_ip: false
+            # With a volume size the builder boots from a volume, which is
+            # kept when the server is deleted (terminate_volume: false) and
+            # uploaded as the image. Flavors with disk=0 cannot boot any
+            # other way.
+            boot_from_volume: "{{ _volume_size | int > 0 }}"
+            volume_size: "{{ _volume_size | int or omit }}"
+            terminate_volume: false
+            wait: true
+            timeout: 600
+          register: _compute_image_builder
+
+        # access_ipv4 is empty unless the cloud sets it, so fall back to the
+        # first IPv4 address of the first network.
+        - name: Add the builder to the inventory
+          ansible.builtin.add_host:
+            name: "{{ _builder_name }}"
+            groups: _compute_image_builder
+            ansible_host: "{{ _compute_image_builder.server.access_ipv4
+                              | default('', true)
+                              | ternary(_compute_image_builder.server.access_ipv4,
+                                        _builder_ipv4) }}"
+            ansible_user: "{{ _ssh_user }}"
+            compute_image_server_id: "{{ _compute_image_builder.server.id }}"
+            compute_image_volume_id: "{{ (_compute_image_builder.server.attached_volumes
+                                          | default([], true) | first
+                                          | default({})).id | default('') }}"
+            compute_image_cloud: "{{ _cloud }}"
+            compute_image_name: "{{ compute_image_name }}"
+            compute_image_volume_size: "{{ _volume_size }}"
+          vars:
+            _builder_ipv4: "{{ _compute_image_builder.server.addresses
+                               | dict2items | map(attribute='value') | list | first
+                               | selectattr('version', 'equalto', 4)
+                               | map(attribute='addr') | first }}"
+          changed_when: false
+
+      rescue:
+        - name: Delete the builder VM after a failed start
+          openstack.cloud.server:
+            cloud: "{{ _cloud }}"
+            name: "{{ _builder_name }}"
+            state: absent
+            wait: true
+            timeout: 600
+
+        - name: Delete its volume
+          openstack.cloud.volume:
+            cloud: "{{ _cloud }}"
+            name: "{{ (_compute_image_builder.server.attached_volumes
+                       | default([], true) | first | default({})).id | default('') }}"
+            state: absent
+            wait: true
+            timeout: 600
+          when:
+            - _compute_image_builder is defined
+            - (_compute_image_builder.server.attached_volumes | default([], true)) | length > 0
+
+        - name: Fail
+          ansible.builtin.fail:
+            msg: "the builder could not be started; it has been deleted"
 
 - name: Configure the compute node image, snapshot it and delete it
   hosts: _compute_image_builder
   gather_facts: false
   become: true
-  vars:
-    compute_image_extra_roles: []
   tasks:
     # The builder is deleted in the always block: a leaked VM costs money.
+    # ignore_unreachable matters here: without it a host that drops off (a
+    # cut ssh tunnel, a crash) skips the always block and leaks the VM.
     - name: Build the image
+      ignore_unreachable: true
       block:
         - name: Wait for SSH
           ansible.builtin.wait_for_connection:
@@ -114,10 +199,19 @@
           ansible.builtin.include_role:
             name: pescobar.slurm.slurm_compute_image
 
+        # default() and not a play var: a play var would override the list
+        # set in the inventory.
         - name: Apply the site-specific roles
           ansible.builtin.include_role:
             name: "{{ item }}"
-          loop: "{{ compute_image_extra_roles }}"
+          loop: "{{ compute_image_extra_roles | default([]) }}"
+
+        # Handlers would otherwise flush at the end of the play, which is
+        # after the cleanup and after the builder has been deleted: a role
+        # that does its real work in a handler (installing an autofs map,
+        # say) would be missing from the image.
+        - name: Run the pending handlers before cleaning up
+          ansible.builtin.meta: flush_handlers
 
         - name: Clean the image
           ansible.builtin.include_role:
@@ -134,12 +228,29 @@
           delegate_to: localhost
           become: false
 
+        # Volume-backed: the volume must be 'available' to be uploaded, so
+        # the server goes first. It is kept (terminate_volume: false).
+        - name: Delete the builder VM before uploading its volume
+          openstack.cloud.server:
+            cloud: "{{ compute_image_cloud }}"
+            name: "{{ inventory_hostname }}"
+            state: absent
+            wait: true
+            timeout: 600
+          delegate_to: localhost
+          become: false
+          when: compute_image_volume_size | int > 0
+
         - name: Create the image from the builder
           ansible.builtin.script:
             cmd: >-
               {{ playbook_dir }}/../roles/slurm_compute_image/files/snapshot_server.py
               --cloud={{ compute_image_cloud }}
+              {% if compute_image_volume_size | int > 0 %}
+              --volume={{ compute_image_volume_id }}
+              {% else %}
               --server={{ compute_image_server_id }}
+              {% endif %}
               --name={{ compute_image_name }}
             executable: "{{ ansible_playbook_python }}"
           delegate_to: localhost
@@ -161,3 +272,31 @@
             timeout: 600
           delegate_to: localhost
           become: false
+
+        # Retries as well as the script's own wait: cinder can hold the
+        # volume 'uploading' for a moment after the image is active.
+        - name: Delete the builder volume
+          openstack.cloud.volume:
+            cloud: "{{ compute_image_cloud }}"
+            name: "{{ compute_image_volume_id }}"
+            state: absent
+            wait: true
+            timeout: 600
+          delegate_to: localhost
+          become: false
+          register: _compute_image_volume_deleted
+          until: _compute_image_volume_deleted is succeeded
+          retries: 30
+          delay: 10
+          when:
+            - compute_image_volume_size | int > 0
+            - compute_image_volume_id | length > 0
+
+        # ignore_unreachable above would otherwise let a run without an
+        # image count as a success.
+        - name: Fail when no image was created
+          ansible.builtin.fail:
+            msg: >-
+              The build produced no image (the builder became unreachable or
+              a task failed); the builder and its volume have been deleted.
+          when: _compute_image_snapshot is not defined

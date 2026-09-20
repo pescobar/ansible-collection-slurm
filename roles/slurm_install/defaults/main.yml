@@ -61,6 +61,9 @@ slurm_install_cloud_scheduling: false
 #       network: my-network
 #       keypair: my-keypair
 #       security_groups: [default, slurm]
+#       volume_size: 20            # boot from a new volume of this size (GB);
+#                                  # required where flavors have disk=0, and
+#                                  # the volume is deleted with the node
 #       extra: "MemSpecLimit=512"   # appended to the NodeName line
 slurm_install_cloud_nodes: []
 
