@@ -276,6 +276,12 @@ Lua auto-add plugin, systemd drop-ins.
   per-node key via cloud-init user-data from the resume program (metadata
   exposure), or use SSH host certificates signed by a cluster CA (preferred
   for anything long-lived).
+  **Verified end to end on the real cloud (2026-09-20, SWITCH zhw):** image
+  built (private, from a volume), a job created a node from it (~1m50s to
+  ACTIVE), the node registered over configless and ran the job with the NFS
+  home and /cvmfs working, accounting recorded it, and POWER_DOWN deleted the
+  VM by its recorded id leaving no volume behind.
+
   **Live-cloud findings (2026-09-20, SWITCH zhw), all fixed here:**
   - every flavor has **disk=0**, so a server can only boot from a volume:
     the builder needs `compute_image_volume_size` (boot_from_volume +
@@ -302,7 +308,8 @@ Lua auto-add plugin, systemd drop-ins.
   - **handlers never ran**: they flush at the end of the play, i.e. after the
     cleanup and after the builder is deleted, so `cvmfs_config setup` (a
     handler in pescobar.cvmfs_client) never happened and the image had no
-    /cvmfs. `meta: flush_handlers` now runs after the site roles.
+    /cvmfs. `meta: flush_handlers` now runs after the site roles; the rebuilt
+    image ran 6 handlers and a node created from it has /cvmfs.
   Two Ansible traps found here: `delegate_to` is resolved even for a task
   whose `when` is false, and even inside a block with that `when`, so a
   possibly-empty delegate host needs a ternary fallback; and `cloud-init
