@@ -24,6 +24,21 @@ slurm_install_dbd_host: "{{ slurm_install_controller_host }}"
 # fact). Leave off when DNS already resolves the cluster hostnames.
 slurm_install_manage_etc_hosts: false
 
+# Configless mode (https://slurm.schedmd.com/configless_slurm.html): only the
+# controller holds /etc/slurm/slurm.conf. slurmd (workers) and sackd (submit
+# hosts) fetch it from slurmctld over --conf-server and cache it under
+# /run/slurm/conf, so the config files below are deployed to the controller
+# only and `scontrol reconfigure` pushes changes out.
+slurm_install_configless: false
+
+# host[:port] the workers and submit hosts fetch the config from.
+slurm_install_conf_server: "{{ slurm_install_controller_host }}:6817"
+
+# SlurmctldParameters for the built-in slurm.conf, as a list.
+# 'enable_configless' is added automatically when slurm_install_configless is
+# true. Example: ['idle_on_node_suspend'].
+slurm_install_slurmctld_parameters: []
+
 # Packages per host type (Ubuntu archive names).
 slurm_install_packages_common:
   - slurm-client
@@ -36,6 +51,10 @@ slurm_install_packages_dbd:
   - python3-pymysql  # ansible.mariadb modules
 slurm_install_packages_worker:
   - slurmd
+# Submit hosts in configless mode: sackd holds the fetched config for the
+# client commands (it is not needed when every host has a local slurm.conf).
+slurm_install_packages_submit_configless:
+  - sackd
 
 # slurmdbd's MariaDB database. The password has no default: set it (vaulted)
 # for the dbd host.

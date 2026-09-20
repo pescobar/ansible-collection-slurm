@@ -1,4 +1,6 @@
 ---
+# In configless mode only the controller holds the config files; slurmd and
+# sackd fetch them from slurmctld (see the two /etc/default tasks below).
 - name: Deploy slurm.conf
   ansible.builtin.template:
     src: "{{ slurm_install_slurm_conf_template }}"
@@ -6,9 +8,13 @@
     owner: root
     group: root
     mode: "0644"
-  when: _slurm_install_templated
+  when:
+    - _slurm_install_templated
+    - _slurm_install_is_controller or not slurm_install_configless | bool
   notify: Slurm config changed
 
+# slurmctld ships cgroup.conf to the workers in configless mode, so there it
+# belongs on the controller instead of on each worker.
 - name: Deploy cgroup.conf
   ansible.builtin.template:
     src: "{{ slurm_install_cgroup_conf_template }}"
@@ -18,9 +24,79 @@
     mode: "0644"
   when:
     - _slurm_install_templated
-    - _slurm_install_is_worker
     - slurm_install_deploy_cgroup_conf | bool
+    - _slurm_install_is_controller if slurm_install_configless | bool
+      else _slurm_install_is_worker
+  notify: Slurm config changed
+
+# The Ubuntu units read these (EnvironmentFile=-/etc/default/<unit>) and pass
+# the options to the daemon: slurmd --conf-server / sackd --conf-server.
+- name: Point slurmd at the config server
+  ansible.builtin.copy:
+    content: |
+      # Ansible managed (pescobar.slurm, slurm_install role)
+      SLURMD_OPTIONS="--conf-server {{ slurm_install_conf_server }}"
+    dest: /etc/default/slurmd
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - slurm_install_configless | bool
+    - _slurm_install_is_worker
   notify: Restart slurmd
+
+- name: Point sackd at the config server
+  ansible.builtin.copy:
+    content: |
+      # Ansible managed (pescobar.slurm, slurm_install role)
+      SACKD_OPTIONS="--conf-server {{ slurm_install_conf_server }}"
+    dest: /etc/default/sackd
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - slurm_install_configless | bool
+    - _slurm_install_is_submit
+    - not _slurm_install_is_controller
+  notify: Restart sackd
+
+# Switching the other way: --conf-server takes precedence over a local
+# slurm.conf, so leaving the line behind would keep the daemons configless.
+- name: Look for leftover config-server options
+  ansible.builtin.stat:
+    path: "/etc/default/{{ item }}"
+  register: _slurm_install_defaults_files
+  loop:
+    - slurmd
+    - sackd
+  when: not slurm_install_configless | bool
+
+- name: Remove the config-server option
+  ansible.builtin.lineinfile:
+    path: "{{ item.stat.path }}"
+    regexp: '^{{ item.item | upper }}_OPTIONS="--conf-server'
+    state: absent
+  loop: "{{ _slurm_install_defaults_files.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - not slurm_install_configless | bool
+    - item.stat.exists | default(false)
+  notify: Restart slurmd
+
+# A cluster switched from static config to configless would otherwise keep
+# stale files that the client commands still read.
+- name: Remove the local Slurm config from the non-controller hosts
+  ansible.builtin.file:
+    path: "/etc/slurm/{{ item }}"
+    state: absent
+  loop:
+    - slurm.conf
+    - cgroup.conf
+  when:
+    - slurm_install_configless | bool
+    - not _slurm_install_is_controller
+  notify: Slurm config changed
 
 - name: Deploy job_submit.lua
   ansible.builtin.template:

@@ -41,7 +41,12 @@ non-accounting Slurm functionality can live in the same collection.
   memory/core limits, submit hosts — with optional ``/etc/hosts`` management,
   custom templates, extra ``slurm.conf`` lines, config from a git repo, a
   ``job_submit.lua`` plugin (an auto-add-users script is included), and
-  systemd drop-ins. Tested by a full deployment on an Ubuntu 26.04 runner VM
+  systemd drop-ins, and optional `configless mode
+  <https://slurm.schedmd.com/configless_slurm.html>`_
+  (``slurm_install_configless``: only the controller holds ``slurm.conf``,
+  workers and submit hosts fetch it from slurmctld over ``--conf-server``,
+  ``sackd`` is installed on the submit hosts, and config changes are pushed
+  with ``scontrol reconfigure``). Tested by a full deployment on an Ubuntu 26.04 runner VM
   (``acceptance-install.yml``: idempotency, core/memory limits, accounting
   enforcement with ``slurm_acct``). Adds a dependency
   on ``ansible.mariadb`` and raises the minimum ansible-core to 2.16.

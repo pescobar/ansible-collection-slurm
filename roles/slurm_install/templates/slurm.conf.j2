@@ -6,6 +6,11 @@ ClusterName={{ slurm_install_cluster_name }}
 SlurmctldHost={{ slurm_install_controller_host }}
 AuthType=auth/munge
 SlurmUser=slurm
+{% set _ctld_params = (['enable_configless'] if slurm_install_configless else [])
+                      + slurm_install_slurmctld_parameters %}
+{% if _ctld_params | length > 0 %}
+SlurmctldParameters={{ _ctld_params | unique | join(',') }}
+{% endif %}
 
 # Daemons (paths match the Ubuntu packages' systemd units and directories)
 SlurmctldPort=6817

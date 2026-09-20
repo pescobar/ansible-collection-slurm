@@ -199,6 +199,26 @@ Lua auto-add plugin, systemd drop-ins.
   "Configured MailProg is invalid" (no `/usr/bin/mail`) — harmless.
 - In ansible-lint's template check, `inventory_hostname in <list>` fails;
   use `<group> in group_names`.
+- **Configless** (`slurm_install_configless`, done 2026-09-20, verified on a
+  3-container Ubuntu 26.04 cluster: controller + worker + submit host, docker
+  embedded DNS, `slurm_install_manage_etc_hosts: false`). Verified facts:
+  the Ubuntu units read `EnvironmentFile=-/etc/default/<unit>`, so
+  `SLURMD_OPTIONS`/`SACKD_OPTIONS` carry `--conf-server <host>:6817`; the
+  `sackd` package ships `/etc/default/sackd` and its own unit; slurmd's
+  `ConditionPathExists` is already commented out. The fetched config lands in
+  `/run/slurm/conf` (slurm.conf + cgroup.conf + plugstack.conf on the worker,
+  slurm.conf + plugstack.conf on the submit host) and the client commands
+  read it with no `/etc/slurm/slurm.conf` at all. `cgroup.conf` therefore
+  goes to the **controller** (slurmctld serves it), not to the workers.
+  A config change needs `scontrol reconfigure` on the controller to reach the
+  cached copies — restarting slurmctld alone does not (25.11's
+  `reconfig_on_restart` would, but the role does not set it).
+  **`--conf-server` beats a local `slurm.conf`**, so switching a cluster back
+  to static must delete that line from `/etc/default/{slurmd,sackd}`, which
+  the role does; both directions were tested and are idempotent.
+- `ansible-galaxy collection install` has **no `-q` flag**: passing it fails
+  the install silently in a pipeline and leaves a stale collection installed
+  (cost an hour of confusing test results).
 - slurmctld resolves accounting users to uids when it loads associations:
   a Unix user created *after* the accounting load is rejected ("Invalid
   account", slurmctld logs "User N not found") until `scontrol reconfigure`.
@@ -305,7 +325,8 @@ simply run `tests/install/run-tests.sh` inside it (mount the repo at
   ansible 10 breaks on openstacksdk 4) and willshersystems.sshd to v0.34.0
   (v0.27.1 does not know Ubuntu 26.04 and ends the play with `meta:
   end_host`). Next, in order: configless mode
-  (`sackd` on login nodes), OpenStack elastic scheduling (resume/suspend
+  (DONE 2026-09-20: `slurm_install_configless`, `sackd` on submit hosts),
+  OpenStack elastic scheduling (resume/suspend
   scripts, `clouds.yaml`), an aux script to build compute-node images,
   building `.deb`s from source, custom apt repos. The design decisions for
   configless + elastic nodes (agreed 2026-09-18: delete/create VMs, plain

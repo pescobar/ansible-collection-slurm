@@ -4,6 +4,7 @@
     _slurm_install_is_controller: "{{ inventory_hostname == slurm_install_controller_host }}"
     _slurm_install_is_dbd: "{{ inventory_hostname == slurm_install_dbd_host }}"
     _slurm_install_is_worker: "{{ slurm_install_workers_group in group_names }}"
+    _slurm_install_is_submit: "{{ slurm_install_submit_group in group_names }}"
     _slurm_install_templated: "{{ slurm_install_config_git_repo | length == 0 }}"
 
 - name: Check the role variables
@@ -43,6 +44,9 @@
          + (slurm_install_packages_controller if _slurm_install_is_controller else [])
          + (slurm_install_packages_dbd if _slurm_install_is_dbd else [])
          + (slurm_install_packages_worker if _slurm_install_is_worker else [])
+         + (slurm_install_packages_submit_configless
+            if (slurm_install_configless | bool and _slurm_install_is_submit
+                and not _slurm_install_is_controller) else [])
          + ([] if _slurm_install_templated else ['git', 'rsync']) }}
     state: present
     cache_valid_time: 3600
@@ -70,3 +74,14 @@
     state: started
     enabled: true
   when: _slurm_install_is_worker
+
+# The client commands read the config sackd caches under /run/slurm/conf.
+- name: Start sackd
+  ansible.builtin.systemd_service:
+    name: sackd
+    state: started
+    enabled: true
+  when:
+    - slurm_install_configless | bool
+    - _slurm_install_is_submit
+    - not _slurm_install_is_controller

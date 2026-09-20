@@ -25,3 +25,22 @@
     name: slurmd
     state: restarted
   when: _slurm_install_is_worker
+
+- name: Restart sackd
+  ansible.builtin.systemd_service:
+    name: sackd
+    state: restarted
+  when:
+    - slurm_install_configless | bool
+    - _slurm_install_is_submit
+    - not _slurm_install_is_controller
+
+# Configless: the workers and submit hosts hold a cached copy, and only
+# slurmctld can push the new one. Runs after the restarts above.
+- name: Push the new config to the cluster
+  listen: Slurm config changed
+  ansible.builtin.command: scontrol reconfigure
+  changed_when: true
+  when:
+    - slurm_install_configless | bool
+    - _slurm_install_is_controller
