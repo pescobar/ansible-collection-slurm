@@ -19,7 +19,9 @@ Each node's VM is described by its Features in slurm.conf, e.g.
 network=mynet,security_groups=default|slurm
 
 `security_groups` takes several names separated by '|'; every other feature
-is a single value. Features that are not in the list above are ignored, so
+is a single value. The optional `volume_size` (GB) boots the node from a new
+volume instead of from the image itself, which clouds whose flavors have no
+local disk require. Features that are not in the list above are ignored, so
 Slurm features used for job constraints can live alongside these.
 
 OpenStack credentials come from clouds.yaml, normally /etc/openstack/
@@ -258,14 +260,37 @@ def resolve_vm_parameters(conn, node, features):
         log.error("node=%s no security group in Features", node)
         return None
 
-    return {
+    params = {
         "name": node,
-        "image_id": found["image"].id,
         "flavor_id": found["flavor"].id,
         "networks": [{"uuid": found["network"].id}],
         "key_name": found["keypair"].name,
         "security_groups": groups,
     }
+
+    # A flavor with no local disk (disk=0) cannot boot from an image: the VM
+    # needs a volume created from it. delete_on_termination keeps suspend
+    # from leaving volumes behind.
+    if "volume_size" in features:
+        try:
+            volume_size = int(features["volume_size"])
+        except ValueError:
+            log.error("node=%s volume_size '%s' is not a number", node, features["volume_size"])
+            return None
+        params["block_device_mapping_v2"] = [
+            {
+                "boot_index": 0,
+                "uuid": found["image"].id,
+                "source_type": "image",
+                "destination_type": "volume",
+                "volume_size": volume_size,
+                "delete_on_termination": True,
+            }
+        ]
+    else:
+        params["image_id"] = found["image"].id
+
+    return params
 
 
 def delete_existing_server(conn, node):
@@ -299,7 +324,13 @@ def resume_node(conn, node, features, statedir):
     if not delete_existing_server(conn, node):
         return False
 
-    log.info("node=%s creating VM image=%s flavor=%s", node, features["image"], features["flavor"])
+    log.info(
+        "node=%s creating VM image=%s flavor=%s boot=%s",
+        node,
+        features["image"],
+        features["flavor"],
+        "volume:%sGB" % features["volume_size"] if "volume_size" in features else "image",
+    )
     try:
         server = conn.compute.create_server(**params)
     except Exception as err:

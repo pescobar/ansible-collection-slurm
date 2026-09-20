@@ -345,6 +345,17 @@ then sits in the instance metadata), or sign each node's freshly generated
 key with an SSH certificate authority the clients trust, which needs no
 per-node state.
 
+`compute_image_when_exists` decides what an existing image of that name
+means: `fail` (the default, so a build never replaces one silently), `skip`
+(build nothing, which lets a deploy playbook call the build every time and
+only pay for it once) or `replace`.
+
+On a cloud whose flavors have no local disk (`disk=0`, every server is
+volume-backed), set `compute_image_volume_size`: the builder then boots from
+a volume, and the image is uploaded from that volume once the builder is
+gone. Give the cloud nodes the matching `volume_size` so they boot the same
+way.
+
 The image is created **private**, and the playbook enforces that: it contains
 the cluster's munge key, so anyone able to boot it can authenticate to the
 cluster. Note that Glance's "private" means the owning **project**, not one

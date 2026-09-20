@@ -276,6 +276,33 @@ Lua auto-add plugin, systemd drop-ins.
   per-node key via cloud-init user-data from the resume program (metadata
   exposure), or use SSH host certificates signed by a cluster CA (preferred
   for anything long-lived).
+  **Live-cloud findings (2026-09-20, SWITCH zhw), all fixed here:**
+  - every flavor has **disk=0**, so a server can only boot from a volume:
+    the builder needs `compute_image_volume_size` (boot_from_volume +
+    terminate_volume: false, then delete the server and upload the volume
+    with cinder - `upload_volume_to_image`), and a cloud node needs the
+    `volume_size` Feature (block_device_mapping_v2). The first attempts died
+    with "You specified more local devices than the limit allows".
+  - **play vars beat inventory group_vars**: the playbook's own
+    `compute_image_volume_size: 0` silently overrode the inventory's 20, and
+    an empty `compute_image_extra_roles` would have skipped every site role.
+    Defaults now go through `default()` at the point of use.
+  - the **implicit localhost inherits no group_vars**, so the first play saw
+    none of the compute_image_* vars; the courses repo defines localhost in
+    its inventory.
+  - `access_ipv4` is empty here and `private_v4` does not exist: take the
+    first IPv4 from `addresses`.
+  - a failure before the builder play leaked the VM (the `always` block is in
+    the *next* play) and an **unreachable** host skipped `always` entirely:
+    boot+add_host now have a `rescue`, the builder block sets
+    `ignore_unreachable: true`, and a final task fails the run when no image
+    was produced.
+  - cinder leaves the volume `uploading` for a while after the image goes
+    active: wait for `available` (in the helper) plus retries on the delete.
+  - **handlers never ran**: they flush at the end of the play, i.e. after the
+    cleanup and after the builder is deleted, so `cvmfs_config setup` (a
+    handler in pescobar.cvmfs_client) never happened and the image had no
+    /cvmfs. `meta: flush_handlers` now runs after the site roles.
   Two Ansible traps found here: `delegate_to` is resolved even for a task
   whose `when` is false, and even inside a block with that `when`, so a
   possibly-empty delegate host needs a ternary fallback; and `cloud-init

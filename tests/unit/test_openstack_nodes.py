@@ -200,6 +200,36 @@ def test_resolve_vm_parameters_builds_create_kwargs(mod):
     assert params["security_groups"] == [{"name": "default"}, {"name": "slurm"}]
 
 
+def test_resolve_vm_parameters_boots_from_volume_when_asked(mod):
+    features = dict(FEATURES, volume_size="20")
+    params = mod.resolve_vm_parameters(FakeConn(missing=["server"]), "compute-01", features)
+    # a flavor with disk=0 cannot take image_id: the image goes in the mapping
+    assert "image_id" not in params
+    assert params["block_device_mapping_v2"] == [
+        {
+            "boot_index": 0,
+            "uuid": "image-id",
+            "source_type": "image",
+            "destination_type": "volume",
+            "volume_size": 20,
+            "delete_on_termination": True,
+        }
+    ]
+
+
+def test_resolve_vm_parameters_boots_from_image_without_volume_size(mod):
+    params = mod.resolve_vm_parameters(FakeConn(missing=["server"]), "compute-01", FEATURES)
+    assert params["image_id"] == "image-id"
+    assert "block_device_mapping_v2" not in params
+
+
+def test_resolve_vm_parameters_rejects_a_bad_volume_size(mod, caplog):
+    features = dict(FEATURES, volume_size="big")
+    with caplog.at_level(logging.ERROR):
+        assert mod.resolve_vm_parameters(FakeConn(missing=["server"]), "compute-01", features) is None
+    assert "is not a number" in caplog.text
+
+
 def test_resolve_vm_parameters_reports_missing_features(mod, caplog):
     with caplog.at_level(logging.ERROR):
         assert mod.resolve_vm_parameters(FakeConn(), "compute-01", {"image": "img"}) is None
