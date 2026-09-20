@@ -155,7 +155,7 @@
             compute_image_volume_id: "{{ (_compute_image_builder.server.attached_volumes
                                           | default([], true) | first
                                           | default({})).id | default('') }}"
-            compute_image_cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
+            compute_image_cloud: "{{ _cloud }}"
             compute_image_name: "{{ compute_image_name }}"
             compute_image_volume_size: "{{ _volume_size }}"
           vars:
@@ -194,6 +194,10 @@
   hosts: _compute_image_builder
   gather_facts: false
   become: true
+  vars:
+    # Empty means no 'cloud' argument, so the sdk uses the OS_* environment.
+    # default() as well: the play must not explode if add_host did not run.
+    _cloud: "{{ compute_image_cloud | default('') }}"
   tasks:
     # The builder is deleted in the always block: a leaked VM costs money.
     # ignore_unreachable matters here: without it a host that drops off (a
@@ -235,7 +239,7 @@
 
         - name: Stop the builder so the snapshot is consistent
           openstack.cloud.server_action:
-            cloud: "{{ (compute_image_cloud | length > 0) | ternary(compute_image_cloud, omit) }}"
+            cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
             server: "{{ compute_image_server_id }}"
             action: stop
             timeout: 600
@@ -246,7 +250,7 @@
         # the server goes first. It is kept (terminate_volume: false).
         - name: Delete the builder VM before uploading its volume
           openstack.cloud.server:
-            cloud: "{{ (compute_image_cloud | length > 0) | ternary(compute_image_cloud, omit) }}"
+            cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
             name: "{{ inventory_hostname }}"
             state: absent
             wait: true
@@ -259,7 +263,7 @@
           ansible.builtin.script:
             cmd: >-
               {{ playbook_dir }}/../roles/slurm_compute_image/files/snapshot_server.py
-              {% if compute_image_cloud | length > 0 %}--cloud={{ compute_image_cloud }}{% endif %}
+              {% if _cloud | length > 0 %}--cloud={{ _cloud }}{% endif %}
               {% if compute_image_volume_size | int > 0 %}
               --volume={{ compute_image_volume_id }}
               {% else %}
@@ -279,7 +283,7 @@
       always:
         - name: Delete the builder VM
           openstack.cloud.server:
-            cloud: "{{ (compute_image_cloud | length > 0) | ternary(compute_image_cloud, omit) }}"
+            cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
             name: "{{ inventory_hostname }}"
             state: absent
             wait: true
@@ -291,7 +295,7 @@
         # volume 'uploading' for a moment after the image is active.
         - name: Delete the builder volume
           openstack.cloud.volume:
-            cloud: "{{ (compute_image_cloud | length > 0) | ternary(compute_image_cloud, omit) }}"
+            cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
             name: "{{ compute_image_volume_id }}"
             state: absent
             wait: true
