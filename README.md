@@ -206,9 +206,21 @@ Two things this collection manages that the REST API cannot:
 
 The `slurm_install` role installs Slurm 25.11 from the **Ubuntu 26.04**
 archive (the first Ubuntu LTS whose Slurm meets the accounting floor above)
-and writes a **static** config: every host gets the same `slurm.conf`.
-Configless mode, building packages from source and custom apt repositories
-are planned (see Roadmap).
+and configures the cluster. Two shapes are supported, and both are best run
+in [configless mode](https://slurm.schedmd.com/configless_slurm.html), where
+only the controller holds `slurm.conf` and every other host fetches it from
+slurmctld:
+
+- a **static cluster**, whose compute nodes are machines you keep running;
+- an **elastic cluster** on OpenStack, whose compute nodes slurmctld creates
+  when jobs need them and deletes when they go idle.
+
+Both use the same three inventory groups: the controller (exactly one host,
+running slurmctld, slurmdbd and MariaDB), the workers (slurmd) and the submit
+hosts (the client commands). Inventory hostnames must be the machines' short
+hostnames.
+
+### A static cluster
 
 ```yaml
 # inventory/hosts.yml
@@ -226,6 +238,15 @@ all:
   vars:
     slurm_install_cluster_name: linux
     slurm_install_dbd_storage_password: "{{ vault_slurmdbd_password }}"
+
+    # Only the controller keeps slurm.conf; the workers (slurmd) and the
+    # submit hosts (sackd) fetch it from slurmctld and cache it under
+    # /run/slurm/conf. Leave this out for a local slurm.conf on every host.
+    slurm_install_configless: true
+
+    # The cluster hostnames must resolve. With DNS in place leave this off;
+    # set it to true to have the role write /etc/hosts on every node instead.
+    slurm_install_manage_etc_hosts: false
 ```
 
 ```sh
@@ -233,9 +254,77 @@ ansible-playbook -i inventory/hosts.yml install.yml   # install + configure
 ansible-playbook -i inventory/hosts.yml site.yml      # then load accounting
 ```
 
-Inventory hostnames must be the machines' short hostnames, and the play must
-gather facts on all cluster hosts (nodes are defined from each worker's
-sockets, cores, threads and memory). What the role does:
+The node definitions come from each worker's facts (sockets, cores, threads,
+memory), so the play must gather facts on all cluster hosts. Changing the
+config later is the same command: the role runs `scontrol reconfigure` so the
+hosts pick up the new `slurm.conf` — restarting slurmctld alone does not
+refresh their cached copies.
+
+### An elastic cluster (compute nodes created on demand)
+
+Here the workers group is empty or absent: the compute nodes are
+`State=CLOUD` entries that exist only in `slurm.conf` until a job needs them,
+at which point slurmctld runs the resume program to create a VM from a
+prepared image. After `slurm_install_cloud_suspend_time` idle seconds the
+suspend program deletes it again. Configless is **required**: a created node
+has no config of its own.
+
+```yaml
+# inventory/hosts.yml
+slurm_controller:
+  hosts:
+    slurm-master:
+slurm_submit:
+  hosts:
+    login-node:
+# no slurm_workers group: the compute nodes are created on demand
+all:
+  vars:
+    slurm_install_cluster_name: linux
+    slurm_install_dbd_storage_password: "{{ vault_slurmdbd_password }}"
+    slurm_install_configless: true          # required here
+    slurm_install_manage_etc_hosts: false   # a created node is in no /etc/hosts
+
+    slurm_install_cloud_scheduling: true
+    slurm_install_cloud_nodes:
+      - name: compute-[01-08]
+        cpus: 2
+        real_memory: 3500
+        image: my-compute-image     # built by build_compute_image.yml, below
+        flavor: c002r004
+        network: my-network
+        keypair: my-keypair
+        security_groups: [default, slurm]
+    slurm_install_cloud_suspend_time: 900   # delete after 15 idle minutes
+
+    # Credentials for the resume/suspend programs, written to
+    # /etc/openstack/clouds.yaml (0600, SlurmUser) on the controller.
+    slurm_install_cloud_auth_url: https://keystone.example.org/v3
+    slurm_install_cloud_region_name: myregion
+    slurm_install_cloud_application_credential_id: "{{ vault_os_app_cred_id }}"
+    slurm_install_cloud_application_credential_secret: "{{ vault_os_app_cred_secret }}"
+```
+
+The compute nodes must resolve in DNS, because a re-created node gets a new
+IP; the role sets `CommunicationParameters=NoAddrCache` so slurmctld looks
+the address up on every connection. Build the image **before** the first job
+(see below), then:
+
+```sh
+ansible-playbook -i inventory/hosts.yml install.yml
+sinfo            # the cloud nodes show as 'idle~': known, not running
+srun -N1 hostname
+```
+
+`/var/log/slurm/dynamic_nodes.log` on the controller records every create and
+delete; warnings and errors also go to syslog.
+
+The two shapes mix: keep a `slurm_workers` group *and* declare cloud nodes to
+get permanent workers plus burst capacity, and use
+`slurm_install_cloud_suspend_exc_nodes` for nodes that must never be
+suspended.
+
+What the role does:
 
 - installs the packages per host type and copies the controller's munge key
   to every host;
@@ -266,31 +355,7 @@ Options (see `roles/slurm_install/defaults/main.yml` for all variables):
 The role depends on the `ansible.mariadb` collection (installed
 automatically with this collection).
 
-### Elastic OpenStack compute nodes
-
-With `slurm_install_cloud_scheduling: true` the controller gets a
-`ResumeProgram`/`SuspendProgram` pair that creates and deletes OpenStack VMs,
-so idle compute nodes cost nothing. It needs `slurm_install_configless: true`
-(a created node has no local `slurm.conf` and fetches it from slurmctld) and
-DNS that resolves the node names to the new VMs, e.g. Neutron's internal DNS.
-
-```yaml
-slurm_install_configless: true
-slurm_install_cloud_scheduling: true
-slurm_install_cloud_auth_url: https://keystone.example.org/v3
-slurm_install_cloud_application_credential_id: "{{ vaulted_id }}"
-slurm_install_cloud_application_credential_secret: "{{ vaulted_secret }}"
-slurm_install_cloud_region_name: myregion
-slurm_install_cloud_nodes:
-  - name: compute-[01-08]
-    cpus: 2
-    real_memory: 3500
-    image: my-compute-image      # must have slurmd + munge key installed
-    flavor: c002r004
-    network: my-network
-    keypair: my-keypair
-    security_groups: [default, slurm]
-```
+### How the elastic nodes work
 
 Each node group becomes a `State=CLOUD` node line whose `Features` carry the
 VM settings; the resume program reads them back with `scontrol show node`.
