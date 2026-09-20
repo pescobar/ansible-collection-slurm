@@ -422,15 +422,17 @@ simply run `tests/install/run-tests.sh` inside it (mount the repo at
   to bump ansible to 14.4.0 (the openstack inventory plugin bundled with
   ansible 10 breaks on openstacksdk 4) and willshersystems.sshd to v0.34.0
   (v0.27.1 does not know Ubuntu 26.04 and ends the play with `meta:
-  end_host`). Next, in order: configless mode
-  (DONE 2026-09-20: `slurm_install_configless`, `sackd` on submit hosts),
-  OpenStack elastic scheduling (DONE 2026-09-20:
-  `slurm_install_cloud_scheduling`), compute-node images (DONE 2026-09-20:
-  `slurm_compute_image` + `playbooks/build_compute_image.yml`),
-  building `.deb`s from source, custom apt repos. The design decisions for
+  end_host`). **Configless + elastic nodes are DONE and merged (2026-09-20,
+  PRs #6-#9), verified end to end on SWITCH's OpenStack**:
+  `slurm_install_configless` (`sackd` on submit hosts),
+  `slurm_install_cloud_scheduling`, `slurm_compute_image` +
+  `playbooks/build_compute_image.yml`, and
+  `playbooks/cleanup_cloud_resources.yml`. Next, in order: building `.deb`s
+  from source, custom apt repos. The design decisions for
   configless + elastic nodes (agreed 2026-09-18: delete/create VMs, plain
   OpenStack DNS with no `/etc/hosts` and no pinned ports, pre-built compute
-  image) are in scicore-courses-cloud's CLAUDE.md, section "Current work";
+  image) are in scicore-courses-cloud's CLAUDE.md, section "Elastic compute
+  nodes";
   the elastic parts stay generic here, the OpenStack specifics may live in
   the courses repo. Features of the old role
   intentionally dropped: RedHat/EPEL/OpenHPC, creating the slurm user (the
