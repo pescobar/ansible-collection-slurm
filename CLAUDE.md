@@ -310,6 +310,16 @@ Lua auto-add plugin, systemd drop-ins.
     handler in pescobar.cvmfs_client) never happened and the image had no
     /cvmfs. `meta: flush_handlers` now runs after the site roles; the rebuilt
     image ran 6 handlers and a node created from it has /cvmfs.
+  **Authentication on the control host** (fixed 2026-09-20 after a report):
+  the build and cleanup playbooks used to pass
+  `cloud: {{ slurm_install_cloud_name | default('openstack') }}`, which fails
+  with "Cloud openstack was not found" for anyone authenticating from an
+  openrc file (OS_* env vars, no clouds.yaml). They now pass no `cloud` at
+  all unless `compute_image_cloud` is set, so the sdk falls back to the
+  environment; `snapshot_server.py --cloud` is optional for the same reason.
+  `slurm_install_cloud_name` stays what it always was: the entry in the
+  clouds.yaml written ON THE CONTROLLER for the resume/suspend programs - not
+  the control host's own credentials. Both paths verified against SWITCH.
   Two Ansible traps found here: `delegate_to` is resolved even for a task
   whose `when` is false, and even inside a block with that `when`, so a
   possibly-empty delegate host needs a ternary fallback; and `cloud-init

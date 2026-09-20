@@ -43,7 +43,9 @@ def wait_for_image(conn, image_id, timeout):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cloud", required=True, help="clouds.yaml entry")
+    parser.add_argument(
+        "--cloud", help="clouds.yaml entry; omit to use the OS_* environment"
+    )
     parser.add_argument("--server", help="server id or name to snapshot")
     parser.add_argument("--volume", help="volume id to upload (must be available)")
     parser.add_argument("--name", required=True, help="name for the new image")
@@ -54,7 +56,7 @@ def main():
     if bool(args.server) == bool(args.volume):
         parser.error("pass exactly one of --server or --volume")
 
-    conn = openstack.connect(cloud=args.cloud)
+    conn = openstack.connect(cloud=args.cloud) if args.cloud else openstack.connect()
 
     if args.server:
         server = conn.compute.find_server(args.server, ignore_missing=True)
