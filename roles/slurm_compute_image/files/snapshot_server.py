@@ -26,18 +26,30 @@ import time
 import openstack
 
 
-def wait_for_image(conn, image_id, timeout):
+def wait_for_image(conn, image_id, timeout, name=None):
     """Return the image once it leaves 'queued'/'saving', or None on timeout."""
     deadline = time.time() + timeout
+    status = "missing"
     while time.time() < deadline:
-        image = conn.image.get_image(image_id)
-        if image.status == "active":
+        # cinder hands back the image id before glance has a record of it, so
+        # a 404 here means 'not yet', not 'never': keep polling, and look the
+        # name up as well in case the image lands under another id.
+        try:
+            image = conn.image.get_image(image_id)
+        except openstack.exceptions.NotFoundException:
+            image = conn.image.find_image(name, ignore_missing=True) if name else None
+            if image is None:
+                time.sleep(5)
+                continue
+            image_id = image.id
+        status = image.status
+        if status == "active":
             return image
-        if image.status in ("killed", "deleted", "pending_delete"):
-            print(f"image {image_id} ended in status '{image.status}'", file=sys.stderr)
+        if status in ("killed", "deleted", "pending_delete"):
+            print(f"image {image_id} ended in status '{status}'", file=sys.stderr)
             return None
         time.sleep(5)
-    print(f"image {image_id} still '{image.status}' after {timeout}s", file=sys.stderr)
+    print(f"image {image_id} still '{status}' after {timeout}s", file=sys.stderr)
     return None
 
 
@@ -85,7 +97,7 @@ def main():
         )
         image_id = getattr(result, "image_id", None) or result["image_id"]
 
-    image = wait_for_image(conn, image_id, args.timeout)
+    image = wait_for_image(conn, image_id, args.timeout, args.name)
     if image is None:
         return 1
 
