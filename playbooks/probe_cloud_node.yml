@@ -211,26 +211,25 @@
   vars:
     _file: "{{ slurm_cloud_probe_facts_file
                | default(inventory_dir ~ '/group_vars/all/slurm_cloud_node_facts.yml') }}"
+    _probes: "{{ groups['_slurm_cloud_probe'] | default([]) }}"
+    # Extract the two values a probe exists for, not its whole hostvars:
+    # taking the lot would evaluate its connection variables as well, and a
+    # ProxyCommand written in terms of hostvars does not resolve here.
+    _flavors: "{{ _probes | map('extract', hostvars, 'slurm_cloud_probe_flavor') | list }}"
+    _measured: "{{ _probes | map('extract', hostvars, 'ansible_facts') | list }}"
+    _reported: "{{ _measured | selectattr('memtotal_mb', 'defined') | list }}"
   tasks:
     # Nothing booted: the first play skipped, or there was nothing to do. An
     # empty run must not clobber the file it decided to keep.
     - name: Stop here when no probe ran
       ansible.builtin.meta: end_play
-      when: groups['_slurm_cloud_probe'] | default([]) | length == 0
+      when: _probes | length == 0
 
-    - name: Collect the probes that reported their facts
-      ansible.builtin.set_fact:
-        _reported: "{{ groups['_slurm_cloud_probe'] | default([])
-                       | map('extract', hostvars)
-                       | selectattr('ansible_facts.memtotal_mb', 'defined')
-                       | list }}"
-
-    - name: Check every probe reported
+    - name: Check every probe reported its facts
       ansible.builtin.assert:
-        that: _reported | length == groups['_slurm_cloud_probe'] | default([]) | length
+        that: _reported | length == _probes | length
         fail_msg: >-
-          Only {{ _reported | length }} of
-          {{ groups['_slurm_cloud_probe'] | default([]) | length }} probes
+          Only {{ _reported | length }} of {{ _probes | length }} probes
           reported their facts; nothing was written.
         quiet: true
 
@@ -255,20 +254,20 @@
               cores_per_socket: {{ facts.cores_per_socket }}
               threads_per_core: {{ facts.threads_per_core }}
           {% endfor %}
-          {% for probe in _reported | sort(attribute='slurm_cloud_probe_flavor') %}
-            {{ probe.slurm_cloud_probe_flavor }}:
-              cpus: {{ probe.ansible_facts['processor_vcpus'] }}
-              real_memory: {{ probe.ansible_facts['memtotal_mb'] | int
+          {% for flavor, facts in _flavors | zip(_measured) | sort %}
+            {{ flavor }}:
+              cpus: {{ facts['processor_vcpus'] }}
+              real_memory: {{ facts['memtotal_mb'] | int
                               - slurm_install_node_memory_reserve_mb | default(0) | int }}
-              sockets: {{ probe.ansible_facts['processor_count'] }}
-              cores_per_socket: {{ probe.ansible_facts['processor_cores'] }}
-              threads_per_core: {{ probe.ansible_facts['processor_threads_per_core'] }}
+              sockets: {{ facts['processor_count'] }}
+              cores_per_socket: {{ facts['processor_cores'] }}
+              threads_per_core: {{ facts['processor_threads_per_core'] }}
           {% endfor %}
       vars:
         # What this run did not measure stays in the file; what it did
-        # measure is written fresh below.
+        # measure is written fresh above.
         _kept: "{{ _slurm_cloud_probe_previous | default({}, true) | dict2items
-                   | rejectattr('key', 'in', _reported | map(attribute='slurm_cloud_probe_flavor') | list)
+                   | rejectattr('key', 'in', _flavors)
                    | list | items2dict }}"
 
     - name: Report
