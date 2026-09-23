@@ -1,0 +1,205 @@
+---
+# Measure what a cloud node really has: boot one throwaway VM per flavor used
+# in slurm_install_cloud_nodes, read its facts, delete it, and write the
+# numbers to a vars file that slurm.conf.j2 uses for CPUs, RealMemory and the
+# node topology.
+#
+#   ansible-playbook pescobar.slurm.probe_cloud_node
+#   ansible-playbook pescobar.slurm.probe_cloud_node -e slurm_cloud_probe_flavors='[c016r064]'
+#
+# Why a VM and not the flavor API: Slurm compares RealMemory with what slurmd
+# reports, and a VM shows less memory than its flavor advertises (the kernel
+# keeps some), so a node configured from the flavor's RAM drains with 'Low
+# RealMemory'. Sockets/cores/threads are the hypervisor's business too.
+#
+# Run it when the flavor of a node group changes, then re-run the playbook
+# that applies slurm_install: the role renders slurm.conf again and its
+# handlers restart slurmctld and push the new config to the cluster.
+#
+# The boot settings come from the matching slurm_install_cloud_nodes entry
+# (image, network, keypair, security_groups, volume_size), so a probe boots
+# the same kind of VM Slurm would create. Variables:
+#
+#   slurm_cloud_probe_cloud       clouds.yaml entry; unset means the OS_*
+#                                 environment (an openrc file)
+#   slurm_cloud_probe_flavors     probe only these flavors (default: every
+#                                 flavor in slurm_install_cloud_nodes)
+#   slurm_cloud_probe_ssh_user    user Ansible connects as (default: ubuntu)
+#   slurm_cloud_probe_facts_file  where to write (default:
+#                                 <inventory>/group_vars/all/slurm_cloud_node_facts.yml)
+#
+# Each probe joins the group '_slurm_cloud_probe', so connection settings (a
+# jump host, a different key) go in group_vars/_slurm_cloud_probe/ - the hosts
+# are added at run time and are in no other group.
+
+- name: Boot one probe VM per flavor
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _cloud: "{{ slurm_cloud_probe_cloud | default('') }}"
+    _ssh_user: "{{ slurm_cloud_probe_ssh_user | default('ubuntu') }}"
+    # One entry per flavor: the first node group that uses it decides what the
+    # probe boots from.
+    _groups_by_flavor: >-
+      {{ slurm_install_cloud_nodes | default([])
+         | selectattr('flavor', 'in', slurm_cloud_probe_flavors
+                                      | default(slurm_install_cloud_nodes
+                                                | default([])
+                                                | map(attribute='flavor')
+                                                | list))
+         | groupby('flavor') | map('last') | map('first') | list }}
+  tasks:
+    - name: Check there is something to probe
+      ansible.builtin.assert:
+        that: _groups_by_flavor | length > 0
+        fail_msg: >-
+          Nothing to probe: set slurm_install_cloud_nodes (normally from the
+          cluster's inventory), and slurm_cloud_probe_flavors must name
+          flavors that appear in it.
+        quiet: true
+
+    # Anything failing after a VM exists must not leak it: the always block of
+    # the next play is not reached if this one fails.
+    - name: Boot the probes and put them in the inventory
+      block:
+
+        - name: Boot a probe VM per flavor
+          openstack.cloud.server:
+            cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
+            name: "slurm-probe-{{ item.flavor }}"
+            image: "{{ item.image }}"
+            flavor: "{{ item.flavor }}"
+            network: "{{ item.network }}"
+            key_name: "{{ item.keypair }}"
+            security_groups: "{{ item.security_groups | default([]) }}"
+            auto_ip: false
+            # Flavors with disk=0 cannot boot from an image at all; the volume
+            # goes away with the server.
+            boot_from_volume: "{{ item.volume_size is defined }}"
+            volume_size: "{{ item.volume_size | default(omit) }}"
+            terminate_volume: true
+            wait: true
+            timeout: 600
+          loop: "{{ _groups_by_flavor }}"
+          loop_control:
+            label: "{{ item.flavor }}"
+          register: _slurm_cloud_probe_servers
+
+        # access_ipv4 is empty unless the cloud sets it, so fall back to the
+        # first IPv4 address of the first network.
+        - name: Add the probes to the inventory
+          ansible.builtin.add_host:
+            name: "{{ item.server.name }}"
+            groups: _slurm_cloud_probe
+            ansible_host: "{{ item.server.access_ipv4 | default('', true)
+                              | ternary(item.server.access_ipv4, _probe_ipv4) }}"
+            ansible_user: "{{ _ssh_user }}"
+            slurm_cloud_probe_flavor: "{{ item.item.flavor }}"
+            slurm_cloud_probe_cloud: "{{ _cloud }}"
+          vars:
+            _probe_ipv4: "{{ item.server.addresses | dict2items
+                             | map(attribute='value') | list | first
+                             | selectattr('version', 'equalto', 4)
+                             | map(attribute='addr') | first }}"
+          loop: "{{ _slurm_cloud_probe_servers.results }}"
+          loop_control:
+            label: "{{ item.item.flavor }}"
+          changed_when: false
+
+      rescue:
+        - name: Delete the probe VMs after a failed start
+          openstack.cloud.server:
+            cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
+            name: "slurm-probe-{{ item.flavor }}"
+            state: absent
+            wait: true
+            timeout: 600
+          loop: "{{ _groups_by_flavor }}"
+          loop_control:
+            label: "{{ item.flavor }}"
+
+        - name: Fail
+          ansible.builtin.fail:
+            msg: "the probes could not be started; they have been deleted"
+
+- name: Read the facts off the probes
+  hosts: _slurm_cloud_probe
+  gather_facts: false
+  # ignore_unreachable matters here: without it a host that drops off skips
+  # the always block and leaks the VM.
+  tasks:
+    - name: Gather the facts
+      ignore_unreachable: true
+      block:
+
+        - name: Wait for SSH
+          ansible.builtin.wait_for_connection:
+            timeout: 600
+            sleep: 5
+
+        - name: Gather facts
+          ansible.builtin.setup:
+            gather_subset:
+              - hardware
+
+      always:
+        - name: Delete the probe VM
+          openstack.cloud.server:
+            cloud: "{{ (slurm_cloud_probe_cloud | length > 0)
+                       | ternary(slurm_cloud_probe_cloud, omit) }}"
+            name: "{{ inventory_hostname }}"
+            state: absent
+            wait: true
+            timeout: 600
+          delegate_to: localhost
+          become: false
+
+- name: Write the probed facts
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _file: "{{ slurm_cloud_probe_facts_file
+               | default(inventory_dir ~ '/group_vars/all/slurm_cloud_node_facts.yml') }}"
+  tasks:
+    - name: Collect the probes that reported their facts
+      ansible.builtin.set_fact:
+        _reported: "{{ groups['_slurm_cloud_probe'] | default([])
+                       | map('extract', hostvars)
+                       | selectattr('ansible_facts.memtotal_mb', 'defined')
+                       | list }}"
+
+    - name: Check every probe reported
+      ansible.builtin.assert:
+        that: _reported | length == groups['_slurm_cloud_probe'] | default([]) | length
+        fail_msg: >-
+          Only {{ _reported | length }} of
+          {{ groups['_slurm_cloud_probe'] | default([]) | length }} probes
+          reported their facts; nothing was written.
+        quiet: true
+
+    # RealMemory above what slurmd reports drains the node, so take what the
+    # VM actually had, minus the role's reserve. No date in the file: it would
+    # make every run a change.
+    - name: Write the facts file
+      ansible.builtin.copy:
+        dest: "{{ _file }}"
+        mode: "0644"
+        content: |
+          ---
+          # Written by the pescobar.slurm.probe_cloud_node playbook: one entry
+          # per flavor, measured on a VM of that flavor. slurm.conf.j2 uses
+          # these where a slurm_install_cloud_nodes entry sets no value itself.
+          slurm_install_cloud_node_facts:
+          {% for probe in _reported | sort(attribute='slurm_cloud_probe_flavor') %}
+            {{ probe.slurm_cloud_probe_flavor }}:
+              cpus: {{ probe.ansible_facts['processor_vcpus'] }}
+              real_memory: {{ probe.ansible_facts['memtotal_mb'] | int
+                              - slurm_install_node_memory_reserve_mb | default(0) | int }}
+              sockets: {{ probe.ansible_facts['processor_count'] }}
+              cores_per_socket: {{ probe.ansible_facts['processor_cores'] }}
+              threads_per_core: {{ probe.ansible_facts['processor_threads_per_core'] }}
+          {% endfor %}
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "wrote {{ _reported | length }} flavor(s) to {{ _file }}"

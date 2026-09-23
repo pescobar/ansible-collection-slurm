@@ -18,6 +18,25 @@
       OpenStack auth_url and application credential.
     quiet: true
 
+# The template falls back to slurm_install_cloud_node_facts, so a missing
+# number is a missing probe: say so here rather than render 'CPUs=' and let
+# slurmctld refuse to start.
+- name: Check every cloud node group knows its CPUs and memory
+  ansible.builtin.assert:
+    that:
+      - item.cpus is defined
+        or (slurm_install_cloud_node_facts[item.flavor] | default({})).cpus is defined
+      - item.real_memory is defined
+        or (slurm_install_cloud_node_facts[item.flavor] | default({})).real_memory is defined
+    fail_msg: >-
+      Node group '{{ item.name }}' sets neither cpus/real_memory nor has
+      flavor '{{ item.flavor }}' been probed. Set them in
+      slurm_install_cloud_nodes, or run the probe_cloud_node playbook.
+    quiet: true
+  loop: "{{ slurm_install_cloud_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 - name: Install uv
   when: slurm_install_cloud_uv_install | bool
   block:

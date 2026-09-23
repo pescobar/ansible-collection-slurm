@@ -67,6 +67,13 @@ slurm_install_cloud_scheduling: false
 #       extra: "MemSpecLimit=512"   # appended to the NodeName line
 slurm_install_cloud_nodes: []
 
+# Per-flavor CPUs/RealMemory/topology measured by the probe_cloud_node
+# playbook, used where an entry above does not set the value itself:
+#   slurm_install_cloud_node_facts:
+#     c016r064: {cpus: 16, real_memory: 63200, sockets: 1,
+#                cores_per_socket: 16, threads_per_core: 1}
+slurm_install_cloud_node_facts: {}
+
 # Which partition the cloud nodes join (defaults to the role's partition).
 slurm_install_cloud_partition_name: "{{ slurm_install_partition_name }}"
 
