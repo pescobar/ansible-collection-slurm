@@ -27,10 +27,11 @@
 #   slurm_cloud_probe_ssh_user    user Ansible connects as (default: ubuntu)
 #   slurm_cloud_probe_facts_file  where to write (default:
 #                                 <inventory>/group_vars/all/slurm_cloud_node_facts.yml)
-#   slurm_cloud_probe_refresh     true probes again even when the facts file
-#                                 exists. Without it an existing file means
-#                                 'already done', so a deploy playbook can
-#                                 import this every run and only pay once.
+#   slurm_cloud_probe_refresh     true measures the flavors again even when
+#                                 the file already has them. Without it a
+#                                 flavor already in the file is skipped, so a
+#                                 deploy playbook can import this every run
+#                                 and only pay for what is new.
 #
 # Each probe joins the group '_slurm_cloud_probe', so connection settings (a
 # jump host, a different key) go in group_vars/_slurm_cloud_probe/ - the hosts
@@ -60,11 +61,19 @@
         path: "{{ _file }}"
       register: _slurm_cloud_probe_facts_file
 
-    - name: Keep the facts already measured and stop here
-      ansible.builtin.meta: end_play
-      when:
-        - _slurm_cloud_probe_facts_file.stat.exists
-        - not slurm_cloud_probe_refresh | default(false) | bool
+    - name: Read what has been measured before
+      ansible.builtin.include_vars:
+        file: "{{ _file }}"
+        name: _slurm_cloud_probe_file
+      when: _slurm_cloud_probe_facts_file.stat.exists
+
+    # Kept for the write at the end: a flavor measured earlier stays in the
+    # file even when this run probes a different one.
+    - name: Remember the facts measured before
+      ansible.builtin.set_fact:
+        _slurm_cloud_probe_previous: "{{ (_slurm_cloud_probe_file | default({}, true)).slurm_install_cloud_node_facts
+                                         | default({}, true) }}"
+      changed_when: false
 
     - name: Check there is something to probe
       ansible.builtin.assert:
@@ -74,6 +83,23 @@
           cluster's inventory), and slurm_cloud_probe_flavors must name
           flavors that appear in it.
         quiet: true
+
+    # Per flavor, not per file: a new node group with a new flavor must be
+    # measured even though the file already exists.
+    - name: Drop the flavors already measured
+      ansible.builtin.set_fact:
+        _to_probe: "{{ _groups_by_flavor
+                       if slurm_cloud_probe_refresh | default(false) | bool
+                       else (_groups_by_flavor
+                             | rejectattr('flavor', 'in', _measured_flavors)
+                             | list) }}"
+      vars:
+        _measured_flavors: "{{ _slurm_cloud_probe_previous.keys() | list }}"
+      changed_when: false
+
+    - name: Keep the flavors already measured and stop here
+      ansible.builtin.meta: end_play
+      when: _to_probe | length == 0
 
     # Anything failing after a VM exists must not leak it: the always block of
     # the next play is not reached if this one fails.
@@ -97,7 +123,7 @@
             terminate_volume: true
             wait: true
             timeout: 600
-          loop: "{{ _groups_by_flavor }}"
+          loop: "{{ _to_probe }}"
           loop_control:
             label: "{{ item.flavor }}"
           register: _slurm_cloud_probe_servers
@@ -131,7 +157,7 @@
             state: absent
             wait: true
             timeout: 600
-          loop: "{{ _groups_by_flavor }}"
+          loop: "{{ _to_probe }}"
           loop_control:
             label: "{{ item.flavor }}"
 
@@ -213,6 +239,14 @@
           # per flavor, measured on a VM of that flavor. slurm.conf.j2 uses
           # these where a slurm_install_cloud_nodes entry sets no value itself.
           slurm_install_cloud_node_facts:
+          {% for flavor, facts in _kept.items() | sort %}
+            {{ flavor }}:
+              cpus: {{ facts.cpus }}
+              real_memory: {{ facts.real_memory }}
+              sockets: {{ facts.sockets }}
+              cores_per_socket: {{ facts.cores_per_socket }}
+              threads_per_core: {{ facts.threads_per_core }}
+          {% endfor %}
           {% for probe in _reported | sort(attribute='slurm_cloud_probe_flavor') %}
             {{ probe.slurm_cloud_probe_flavor }}:
               cpus: {{ probe.ansible_facts['processor_vcpus'] }}
@@ -222,7 +256,13 @@
               cores_per_socket: {{ probe.ansible_facts['processor_cores'] }}
               threads_per_core: {{ probe.ansible_facts['processor_threads_per_core'] }}
           {% endfor %}
+      vars:
+        # What this run did not measure stays in the file; what it did
+        # measure is written fresh below.
+        _kept: "{{ _slurm_cloud_probe_previous | default({}, true) | dict2items
+                   | rejectattr('key', 'in', _reported | map(attribute='slurm_cloud_probe_flavor') | list)
+                   | list | items2dict }}"
 
     - name: Report
       ansible.builtin.debug:
-        msg: "wrote {{ _reported | length }} flavor(s) to {{ _file }}"
+        msg: "measured {{ _reported | length }} flavor(s), wrote {{ _file }}"
