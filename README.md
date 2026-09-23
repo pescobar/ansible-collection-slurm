@@ -379,18 +379,25 @@ and quota. `playbooks/cleanup_cloud_resources.yml` removes them:
 ```sh
 # preview
 ansible-playbook -i inventory/hosts.yml pescobar.slurm.cleanup_cloud_resources --check
-# delete the leftover nodes and any image builder
+# delete the leftover nodes, any image builder, and the compute-node image
 ansible-playbook -i inventory/hosts.yml pescobar.slurm.cleanup_cloud_resources
-# and the image too
+# keep the image (the cluster stays up; only leftover nodes are in the way)
 ansible-playbook -i inventory/hosts.yml pescobar.slurm.cleanup_cloud_resources \
-  -e '{"slurm_cleanup_images": ["my-compute-image"]}'
+  -e '{"slurm_cleanup_images": []}'
 ```
 
 It matches servers by the cloud node definitions: `compute-[01-04]` deletes
 names that are `compute-` followed by digits, so a VM called
-`compute-node-other` is left alone. Images are never deleted unless named,
-and detached volumes only with `slurm_cleanup_orphan_volumes=true` (a node's
-own volume goes with the node; anything else detached may not be yours).
+`compute-node-other` is left alone.
+
+`compute_image_name` is deleted because that image holds the cluster's munge
+key: once the cluster is gone the next slurmctld generates a new key, so a
+node created from the old image cannot authenticate to it, and a build
+playbook makes a fresh image anyway. `slurm_cleanup_images` is the list of
+images to delete - name others to include them, or pass an empty list to
+keep them all. Detached volumes go only with
+`slurm_cleanup_orphan_volumes=true` (a node's own volume goes with the node;
+anything else detached may not be yours).
 
 #### What a cloud node has: `probe_cloud_node.yml`
 

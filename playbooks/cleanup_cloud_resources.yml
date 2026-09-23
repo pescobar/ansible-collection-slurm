@@ -13,10 +13,18 @@
 #     ('compute-[01-04]' matches compute-01 ... compute-99, and nothing else:
 #     the name must be the prefix followed by digits only)
 #   - a leftover image builder, '<compute_image_name>-builder'
+#   - the compute-node image, compute_image_name. It holds the cluster's
+#     munge key, so it stops being usable the moment the cluster is gone: a
+#     node created from it cannot authenticate to the next slurmctld, which
+#     generates a new key. Build playbooks make a fresh one anyway.
+#     slurm_cleanup_images names the images to delete, so an empty list
+#     keeps them - the cluster is staying up and only leftover nodes are in
+#     the way:
 #
-# and, only when you ask for them:
-#   - images, with slurm_cleanup_images (a list of names). Deleting an image
-#     cannot be undone, so it is never automatic.
+#       ansible-playbook pescobar.slurm.cleanup_cloud_resources \
+#         -e '{"slurm_cleanup_images": []}'
+#
+# and, only when you ask for it:
 #   - detached volumes, with slurm_cleanup_orphan_volumes=true. A node's own
 #     volume goes away with the node (delete_on_termination); anything else
 #     that is detached may well belong to something other than this cluster,
@@ -43,6 +51,11 @@
       {{ ['^' ~ (compute_image_name | regex_escape) ~ '-builder$']
          if compute_image_name is defined else [] }}
     _name_regex: "{{ (_node_regexes + _builder_regexes) | join('|') }}"
+    # The image this cluster's nodes were built from, unless the caller says
+    # which images to delete (an empty list keeps them all).
+    _images: >-
+      {{ slurm_cleanup_images
+         | default([compute_image_name] if compute_image_name is defined else []) }}
   tasks:
     - name: Check there is something to match on
       ansible.builtin.assert:
@@ -69,7 +82,7 @@
         msg:
           - "matching: {{ _name_regex }}"
           - "servers: {{ _cleanup_targets | join(', ') | default('none', true) }}"
-          - "images: {{ slurm_cleanup_images | default([]) | join(', ') | default('none', true) }}"
+          - "images: {{ _images | join(', ') | default('none', true) }}"
           - "detached volumes: {{ 'yes' if slurm_cleanup_orphan_volumes | default(false) | bool else 'no' }}"
 
     - name: Delete the leftover servers
@@ -86,7 +99,7 @@
         cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
         name: "{{ item }}"
         state: absent
-      loop: "{{ slurm_cleanup_images | default([]) }}"
+      loop: "{{ _images }}"
 
     - name: Find detached volumes
       openstack.cloud.volume_info:
