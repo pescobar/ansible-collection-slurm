@@ -40,6 +40,7 @@ two by copying YAML values.
 | `pescobar.slurm.slurm_install` (role) | install and configure munge, slurmdbd (MariaDB), slurmctld, slurmd and submit hosts from the Ubuntu 26.04 packages |
 | `playbooks/install.yml` | runs `slurm_install` on the `slurm_controller`, `slurm_workers` and `slurm_submit` groups |
 | `playbooks/site.yml` + `playbooks/inventory/` | ready-to-run accounting playbook and a fully worked sample inventory |
+| `playbooks/probe_cloud_node.yml` | boot one throwaway VM per cloud-node flavor, read its CPUs/memory/topology and write them to a vars file |
 
 ## Quick start
 
@@ -390,6 +391,64 @@ names that are `compute-` followed by digits, so a VM called
 `compute-node-other` is left alone. Images are never deleted unless named,
 and detached volumes only with `slurm_cleanup_orphan_volumes=true` (a node's
 own volume goes with the node; anything else detached may not be yours).
+
+#### What a cloud node has: `probe_cloud_node.yml`
+
+`cpus` and `real_memory` on a `slurm_install_cloud_nodes` entry describe a
+node that does not exist yet, so nothing can measure them at configure time -
+and they matter: Slurm compares `RealMemory` with what slurmd reports, so a
+value taken from the flavor's advertised RAM (the kernel keeps some of it)
+leaves the node drained with *Low RealMemory*.
+
+`playbooks/probe_cloud_node.yml` boots one throwaway VM per flavor used in
+`slurm_install_cloud_nodes` - same image, network, keypair, security groups
+and volume size the real nodes get - reads its facts, deletes it, and writes:
+
+```sh
+ansible-playbook -i inventory/hosts.yml pescobar.slurm.probe_cloud_node
+# only one flavor
+ansible-playbook -i inventory/hosts.yml pescobar.slurm.probe_cloud_node \
+  -e slurm_cloud_probe_flavors='[c016r064]'
+```
+
+```yaml
+# <inventory>/group_vars/all/slurm_cloud_node_facts.yml, written by the run
+slurm_install_cloud_node_facts:
+  c016r064:
+    cpus: 16
+    real_memory: 63200      # measured, minus slurm_install_node_memory_reserve_mb
+    sockets: 1
+    cores_per_socket: 16
+    threads_per_core: 1
+```
+
+`slurm.conf.j2` uses those where an entry sets nothing itself, so a node group
+can be just `name`, `image`, `flavor`, `network`, `keypair` and
+`security_groups`; a `cpus:` or `real_memory:` written by hand still wins.
+`slurm_install` asserts that every group has both from one source or the
+other, so a forgotten probe fails the run with a clear message instead of an
+unstartable slurmctld. Run it again when a group's flavor changes, then
+re-run the playbook that applies `slurm_install`: the role renders
+`slurm.conf` again and its handlers restart slurmctld and push the new config.
+
+A flavor already in the file counts as measured and is skipped, so a deploy
+playbook can import this on every run and only pay for a flavor it has never
+seen - adding a node group with a new flavor measures that one and keeps the
+rest of the file. `slurm_cloud_probe_refresh=true` measures again.
+
+`slurm_cloud_probe_image` overrides what the probes boot from. A flavor has
+the same CPUs, memory and topology whatever image it runs, so pointing this
+at the base image frees the probe from the node image - it can then run
+*before* `slurm_install`, and `slurm.conf` is right the first time instead of
+being rendered once from hand-written numbers and again from the measured
+ones.
+
+Variables: `slurm_cloud_probe_cloud` (clouds.yaml entry; unset uses the `OS_*`
+environment), `slurm_cloud_probe_flavors`, `slurm_cloud_probe_image`,
+`slurm_cloud_probe_ssh_user` (default `ubuntu`),
+`slurm_cloud_probe_facts_file`, `slurm_cloud_probe_refresh`. The probes join the group
+`_slurm_cloud_probe`, so a jump host or a different key goes in
+`group_vars/_slurm_cloud_probe/`.
 
 #### The compute-node image
 

@@ -26,7 +26,8 @@ jobs:
 
       - name: Install test requirements
         # pyyaml: the importer round-trip test imports tools/generate_inventory.py
-        run: pip install pytest pyyaml
+        # jinja2: the slurm.conf cloud-node test renders the real template
+        run: pip install pytest pyyaml jinja2
 
       - name: Run renderer/parser/planner unit tests
         run: python -m pytest tests/unit/ -v
