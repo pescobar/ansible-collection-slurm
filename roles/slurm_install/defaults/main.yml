@@ -83,9 +83,11 @@ slurm_install_cloud_partition_name: "{{ slurm_install_partition_name }}"
 slurm_install_cloud_suspend_time: 600
 slurm_install_cloud_resume_timeout: 600
 slurm_install_cloud_suspend_timeout: 180
-# Nodes created/deleted per minute (0 = no limit).
-slurm_install_cloud_resume_rate: 4
-slurm_install_cloud_suspend_rate: 4
+# Nodes created/deleted per minute (0 = no limit). Kept low on purpose: 4
+# was too fast for SWITCH's OpenStack, where the API starts refusing or
+# stalling the calls and nodes end up DOWN.
+slurm_install_cloud_resume_rate: 2
+slurm_install_cloud_suspend_rate: 2
 # Nodes/partitions never suspended, e.g. 'static' or 'compute-01'.
 slurm_install_cloud_suspend_exc_nodes: ""
 slurm_install_cloud_suspend_exc_parts: ""
