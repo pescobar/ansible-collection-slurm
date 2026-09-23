@@ -436,10 +436,17 @@ playbook can import this on every run and only pay for a flavor it has never
 seen - adding a node group with a new flavor measures that one and keeps the
 rest of the file. `slurm_cloud_probe_refresh=true` measures again.
 
+`slurm_cloud_probe_image` overrides what the probes boot from. A flavor has
+the same CPUs, memory and topology whatever image it runs, so pointing this
+at the base image frees the probe from the node image - it can then run
+*before* `slurm_install`, and `slurm.conf` is right the first time instead of
+being rendered once from hand-written numbers and again from the measured
+ones.
+
 Variables: `slurm_cloud_probe_cloud` (clouds.yaml entry; unset uses the `OS_*`
-environment), `slurm_cloud_probe_flavors`, `slurm_cloud_probe_ssh_user`
-(default `ubuntu`), `slurm_cloud_probe_facts_file`,
-`slurm_cloud_probe_refresh`. The probes join the group
+environment), `slurm_cloud_probe_flavors`, `slurm_cloud_probe_image`,
+`slurm_cloud_probe_ssh_user` (default `ubuntu`),
+`slurm_cloud_probe_facts_file`, `slurm_cloud_probe_refresh`. The probes join the group
 `_slurm_cloud_probe`, so a jump host or a different key goes in
 `group_vars/_slurm_cloud_probe/`.
 

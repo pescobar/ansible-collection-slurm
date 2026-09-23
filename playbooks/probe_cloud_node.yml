@@ -25,6 +25,14 @@
 #   slurm_cloud_probe_flavors     probe only these flavors (default: every
 #                                 flavor in slurm_install_cloud_nodes)
 #   slurm_cloud_probe_ssh_user    user Ansible connects as (default: ubuntu)
+#   slurm_cloud_probe_image       image the probes boot from (default: the
+#                                 node group's own image). A flavor has the
+#                                 same CPUs, memory and topology whatever it
+#                                 boots, so pointing this at the base image
+#                                 lets the probe run before the node image
+#                                 has been built - and before Slurm is
+#                                 configured, so slurm.conf is right the
+#                                 first time.
 #   slurm_cloud_probe_facts_file  where to write (default:
 #                                 <inventory>/group_vars/all/slurm_cloud_node_facts.yml)
 #   slurm_cloud_probe_refresh     true measures the flavors again even when
@@ -110,7 +118,7 @@
           openstack.cloud.server:
             cloud: "{{ (_cloud | length > 0) | ternary(_cloud, omit) }}"
             name: "slurm-probe-{{ item.flavor }}"
-            image: "{{ item.image }}"
+            image: "{{ slurm_cloud_probe_image | default(item.image) }}"
             flavor: "{{ item.flavor }}"
             network: "{{ item.network }}"
             key_name: "{{ item.keypair }}"
