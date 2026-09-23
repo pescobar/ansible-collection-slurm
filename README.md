@@ -431,9 +431,14 @@ unstartable slurmctld. Run it again when a group's flavor changes, then
 re-run the playbook that applies `slurm_install`: the role renders
 `slurm.conf` again and its handlers restart slurmctld and push the new config.
 
+An existing facts file means 'already measured': the playbook stops without
+booting anything, so a deploy playbook can import it every run and only pay
+once. `slurm_cloud_probe_refresh=true` probes again.
+
 Variables: `slurm_cloud_probe_cloud` (clouds.yaml entry; unset uses the `OS_*`
 environment), `slurm_cloud_probe_flavors`, `slurm_cloud_probe_ssh_user`
-(default `ubuntu`), `slurm_cloud_probe_facts_file`. The probes join the group
+(default `ubuntu`), `slurm_cloud_probe_facts_file`,
+`slurm_cloud_probe_refresh`. The probes join the group
 `_slurm_cloud_probe`, so a jump host or a different key goes in
 `group_vars/_slurm_cloud_probe/`.
 

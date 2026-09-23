@@ -27,6 +27,10 @@
 #   slurm_cloud_probe_ssh_user    user Ansible connects as (default: ubuntu)
 #   slurm_cloud_probe_facts_file  where to write (default:
 #                                 <inventory>/group_vars/all/slurm_cloud_node_facts.yml)
+#   slurm_cloud_probe_refresh     true probes again even when the facts file
+#                                 exists. Without it an existing file means
+#                                 'already done', so a deploy playbook can
+#                                 import this every run and only pay once.
 #
 # Each probe joins the group '_slurm_cloud_probe', so connection settings (a
 # jump host, a different key) go in group_vars/_slurm_cloud_probe/ - the hosts
@@ -36,6 +40,8 @@
   hosts: localhost
   gather_facts: false
   vars:
+    _file: "{{ slurm_cloud_probe_facts_file
+               | default(inventory_dir ~ '/group_vars/all/slurm_cloud_node_facts.yml') }}"
     _cloud: "{{ slurm_cloud_probe_cloud | default('') }}"
     _ssh_user: "{{ slurm_cloud_probe_ssh_user | default('ubuntu') }}"
     # One entry per flavor: the first node group that uses it decides what the
@@ -49,6 +55,17 @@
                                                 | list))
          | groupby('flavor') | map('last') | map('first') | list }}
   tasks:
+    - name: Look for the facts file
+      ansible.builtin.stat:
+        path: "{{ _file }}"
+      register: _slurm_cloud_probe_facts_file
+
+    - name: Keep the facts already measured and stop here
+      ansible.builtin.meta: end_play
+      when:
+        - _slurm_cloud_probe_facts_file.stat.exists
+        - not slurm_cloud_probe_refresh | default(false) | bool
+
     - name: Check there is something to probe
       ansible.builtin.assert:
         that: _groups_by_flavor | length > 0
@@ -161,6 +178,12 @@
     _file: "{{ slurm_cloud_probe_facts_file
                | default(inventory_dir ~ '/group_vars/all/slurm_cloud_node_facts.yml') }}"
   tasks:
+    # Nothing booted: the first play skipped, or there was nothing to do. An
+    # empty run must not clobber the file it decided to keep.
+    - name: Stop here when no probe ran
+      ansible.builtin.meta: end_play
+      when: groups['_slurm_cloud_probe'] | default([]) | length == 0
+
     - name: Collect the probes that reported their facts
       ansible.builtin.set_fact:
         _reported: "{{ groups['_slurm_cloud_probe'] | default([])
